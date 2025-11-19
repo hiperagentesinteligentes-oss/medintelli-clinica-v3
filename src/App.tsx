@@ -1,96 +1,21 @@
-// App.tsx - MedIntelli Clínica V3 (arquivo único)
-// -------------------------------------------------
-// DEPENDÊNCIAS (package.json):
-//   "react", "react-dom", "@supabase/supabase-js"
-//   "react-router-dom" (se for usar rotas externas - aqui uso só estado)
-//   "dayjs" (opcional; aqui não usei para simplificar)
-// -------------------------------------------------
-// VARIÁVEIS DE AMBIENTE (.env.local ou Vercel):
-//   VITE_SUPABASE_URL      = https://SEU-PROJETO.supabase.co
-//   VITE_SUPABASE_ANON_KEY = sua chave anon do Supabase
-//   VITE_OPENAI_API_KEY    = chave da OpenAI (gpt-4o-mini ou similar)
-// -------------------------------------------------
-// TABELAS SUPABASE (SQL sugestão):
-//
-// create table patients (
-//   id uuid primary key default gen_random_uuid(),
-//   name text not null,
-//   cpf text,
-//   phone text,
-//   email text,
-//   birth_date date,
-//   notes text,
-//   created_at timestamptz default now()
-// );
-//
-// create table appointments (
-//   id uuid primary key default gen_random_uuid(),
-//   patient_id uuid references patients(id) on delete cascade,
-//   start_time timestamptz not null,
-//   end_time timestamptz,
-//   status text default 'agendado', -- agendado, confirmado, cancelado, concluido
-//   reason text,
-//   created_at timestamptz default now()
-// );
-//
-// create table waitlist (
-//   id uuid primary key default gen_random_uuid(),
-//   patient_name text not null,
-//   phone text,
-//   reason text,
-//   priority int default 1, -- 1 normal, 2 prioridade
-//   created_at timestamptz default now()
-// );
-//
-// create table holidays (
-//   id uuid primary key default gen_random_uuid(),
-//   date date not null,
-//   description text,
-//   is_blocked boolean default true,
-//   created_at timestamptz default now()
-// );
-//
-// create table whatsapp_templates (
-//   id uuid primary key default gen_random_uuid(),
-//   name text not null,
-//   content text not null,
-//   created_at timestamptz default now()
-// );
-//
-// create table whatsapp_logs (
-//   id uuid primary key default gen_random_uuid(),
-//   patient_id uuid,
-//   phone text,
-//   template_id uuid,
-//   message text,
-//   status text, -- enviado, erro, etc
-//   channel text default 'whatsapp',
-//   sent_at timestamptz default now()
-// );
-//
-// create table public_validations (
-//   id uuid primary key default gen_random_uuid(),
-//   code text unique not null,
-//   patient_name text,
-//   doc_type text,
-//   doc_url text,
-//   valid boolean default true,
-//   created_at timestamptz default now()
-// );
-//
-// -- Para simplificar, pode desativar RLS neste MVP:
-// alter table patients disable row level security;
-// alter table appointments disable row level security;
-// alter table waitlist disable row level security;
-// alter table holidays disable row level security;
-// alter table whatsapp_templates disable row level security;
-// alter table whatsapp_logs disable row level security;
-// alter table public_validations disable row level security;
+// App.tsx – MedIntelli Clínica V3 (arquivo único)
 
-import React, { useEffect, useState } from "react";
+// Requisitos:
+// 1) Dependências no package.json:
+//    "react", "react-dom", "react-router-dom", "@supabase/supabase-js"
+// 2) Variáveis de ambiente (Vercel / .env.local):
+//    VITE_SUPABASE_URL
+//    VITE_SUPABASE_ANON_KEY
+//    VITE_OPENAI_API_KEY
+// 3) Tabelas no Supabase (patients, appointments, waitlist, messages)
+//    + campo cpf em patients (para login do paciente no app paciente)
+
+import React, { useEffect, useMemo, useState } from "react";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-// ------- Supabase client único -------
+// --------------------------
+// Supabase client
+// --------------------------
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
@@ -100,26 +25,23 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase: SupabaseClient = createClient(supabaseUrl, supabaseKey);
 
-// ------- Tipos básicos -------
+// --------------------------
+// Tipos
+// --------------------------
 type Section =
   | "dashboard"
   | "pacientes"
   | "agenda"
   | "waitlist"
-  | "holidays"
-  | "whatsapp"
-  | "validation"
   | "chat"
-  | "medico"
-  | "config"
-  | "login";
+  | "mensagens"
+  | "config";
 
 type Patient = {
   id: string;
   name: string;
   cpf: string | null;
   phone: string | null;
-  email: string | null;
   birth_date: string | null;
   notes: string | null;
   created_at: string;
@@ -130,8 +52,8 @@ type Appointment = {
   start_time: string;
   status: string;
   reason: string | null;
-  patient_id: string;
-  patients?: { name: string };
+  patient_id?: string | null;
+  patients?: { name: string | null } | null;
 };
 
 type WaitlistItem = {
@@ -143,76 +65,61 @@ type WaitlistItem = {
   created_at: string;
 };
 
-type Holiday = {
-  id: string;
-  date: string;
-  description: string | null;
-  is_blocked: boolean;
-};
-
-type WhatsTemplate = {
-  id: string;
-  name: string;
-  content: string;
-};
-
-type WhatsLog = {
-  id: string;
-  phone: string | null;
-  message: string | null;
-  status: string | null;
-  sent_at: string;
-};
-
-type ValidationRecord = {
-  id: string;
-  code: string;
-  patient_name: string | null;
-  doc_type: string | null;
-  doc_url: string | null;
-  valid: boolean;
-};
-
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
 };
 
-type UserSession = {
-  role: "admin" | "medico" | "recepcao";
-  name: string;
+type MessageRow = {
+  id: string;
+  channel: string;
+  external_id: string | null;
+  patient_id: string | null;
+  direction: "in" | "out";
+  source: "ia" | "humano";
+  content: string;
+  status: string;
+  created_at: string;
+  patients?: { name: string | null } | null;
 };
 
-// ------- Base de conhecimento da clínica -------
-const CLINIC_KB = `
-Você é o assistente oficial da clínica MedIntelli.
+type Conversation = {
+  key: string;
+  title: string;
+  lastMessage: MessageRow;
+  channel: string;
+  status: string;
+};
+
+// --------------------------
+// Base de conhecimento (IA Clínica)
+// --------------------------
+const CLINIC_KNOWLEDGE_BASE = `
+Você é o assistente da clínica MedIntelli.
+
 Regras:
-- Seja objetivo, cordial e profissional.
-- Responda sobre agendamentos, retornos, orientações gerais, preparo de exames.
-- NÃO dê diagnósticos nem prescrições.
+- Seja objetivo, educado e profissional.
+- Responda dúvidas sobre: agendamentos, horários, retornos, orientações gerais.
+- NÃO faça diagnóstico médico nem prescrição.
 - Em caso de urgência, oriente procurar pronto-atendimento.
-- Quando tiver dúvida, sugira falar com a equipe da clínica.
+- Em caso de dúvidas específicas, oriente falar diretamente com o médico.
+
+A clínica oferece: consultas eletivas, retornos, exames complementares, orientações de rotina.
 `;
 
-// ------- Componentes de layout -------
-function Sidebar(props: {
-  active: Section;
-  onChange: (s: Section) => void;
-  session: UserSession | null;
-}) {
-  const items: { id: Section; label: string; roles?: UserSession["role"][] }[] =
-    [
-      { id: "dashboard", label: "Dashboard" },
-      { id: "pacientes", label: "Pacientes" },
-      { id: "agenda", label: "Agenda" },
-      { id: "waitlist", label: "Fila de Espera" },
-      { id: "holidays", label: "Feriados/Bloqueios" },
-      { id: "whatsapp", label: "Mensagens Automáticas" },
-      { id: "validation", label: "Validação Pública" },
-      { id: "chat", label: "Chat IA" },
-      { id: "medico", label: "Painel Médico" },
-      { id: "config", label: "Configurações" },
-    ];
+// --------------------------
+// Layout
+// --------------------------
+function Sidebar(props: { active: Section; onChange: (s: Section) => void }) {
+  const items: { id: Section; label: string }[] = [
+    { id: "dashboard", label: "Dashboard" },
+    { id: "pacientes", label: "Pacientes" },
+    { id: "agenda", label: "Agenda" },
+    { id: "waitlist", label: "Fila de Espera" },
+    { id: "mensagens", label: "Mensagens" },
+    { id: "chat", label: "Chat IA" },
+    { id: "config", label: "Configurações" },
+  ];
 
   return (
     <aside
@@ -228,18 +135,12 @@ function Sidebar(props: {
         style={{
           fontSize: 20,
           fontWeight: 700,
-          marginBottom: 8,
+          marginBottom: 16,
           color: "#1a3f8b",
         }}
       >
         MedIntelli Clínica
       </h2>
-      {props.session && (
-        <p style={{ fontSize: 12, marginBottom: 16, color: "#333" }}>
-          Logado como <strong>{props.session.name}</strong> (
-          {props.session.role})
-        </p>
-      )}
       <nav style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {items.map((item) => (
           <button
@@ -260,230 +161,73 @@ function Sidebar(props: {
             {item.label}
           </button>
         ))}
-        <button
-          onClick={() => props.onChange("login")}
-          style={{
-            marginTop: 16,
-            textAlign: "left",
-            border: "none",
-            padding: "8px 10px",
-            borderRadius: 6,
-            background: "transparent",
-            color: "#c00",
-            cursor: "pointer",
-            fontSize: 13,
-          }}
-        >
-          Sair / Trocar usuário
-        </button>
       </nav>
     </aside>
   );
 }
 
-function PageContainer(props: { title: string; children: React.ReactNode }) {
+function PageContainer(props: {
+  title: string;
+  children: React.ReactNode;
+  extra?: React.ReactNode;
+}) {
   return (
-    <div style={{ padding: 24 }}>
-      <h1 style={{ fontSize: 22, marginBottom: 12 }}>{props.title}</h1>
+    <div style={{ padding: 20 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 12,
+        }}
+      >
+        <h1 style={{ fontSize: 22 }}>{props.title}</h1>
+        {props.extra}
+      </div>
       <div>{props.children}</div>
     </div>
   );
 }
 
-// ------- Login simples (sem Supabase Auth) -------
-function LoginSection(props: {
-  onLogin: (session: UserSession) => void;
-}) {
-  const [user, setUser] = useState({
-    email: "",
-    password: "",
-    role: "admin" as UserSession["role"],
-  });
-  const [error, setError] = useState("");
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!user.email || !user.password) {
-      setError("Informe e-mail e senha (fictícios).");
-      return;
-    }
-    // Aqui pode integrar Supabase Auth futuramente.
-    const session: UserSession = {
-      role: user.role,
-      name: user.email,
-    };
-    localStorage.setItem("medintelli_clinica_session", JSON.stringify(session));
-    props.onLogin(session);
-  }
-
-  return (
-    <PageContainer title="Login da Clínica">
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          maxWidth: 360,
-          display: "grid",
-          gap: 8,
-          padding: 16,
-          borderRadius: 8,
-          background: "#fff",
-          boxShadow: "0 2px 6px rgba(0,0,0,0.05)",
-        }}
-      >
-        <input
-          placeholder="E-mail"
-          value={user.email}
-          onChange={(e) => setUser((p) => ({ ...p, email: e.target.value }))}
-          style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-        />
-        <input
-          type="password"
-          placeholder="Senha"
-          value={user.password}
-          onChange={(e) => setUser((p) => ({ ...p, password: e.target.value }))}
-          style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-        />
-        <select
-          value={user.role}
-          onChange={(e) =>
-            setUser((p) => ({ ...p, role: e.target.value as UserSession["role"] }))
-          }
-          style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-        >
-          <option value="admin">Administrador</option>
-          <option value="medico">Médico</option>
-          <option value="recepcao">Recepção</option>
-        </select>
-
-        {error && <p style={{ color: "red", fontSize: 12 }}>{error}</p>}
-
-        <button
-          type="submit"
-          style={{
-            padding: "8px 12px",
-            borderRadius: 6,
-            border: "none",
-            background: "#1a73e8",
-            color: "#fff",
-            cursor: "pointer",
-            marginTop: 4,
-          }}
-        >
-          Entrar
-        </button>
-      </form>
-      <p style={{ marginTop: 16, fontSize: 12, color: "#555" }}>
-        Neste MVP o login é apenas de sessão local. Para produção, substitua
-        por Supabase Auth.
-      </p>
-    </PageContainer>
-  );
-}
-
-// ------- Dashboard -------
+// --------------------------
+// Dashboard
+// --------------------------
 function DashboardSection() {
-  const [counts, setCounts] = useState({
-    patients: 0,
-    appointments: 0,
-    waitlist: 0,
-    todayAppointments: 0,
-  });
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const [pats, apps, wait, today] = await Promise.all([
-          supabase.from("patients").select("id", { count: "exact", head: true }),
-          supabase
-            .from("appointments")
-            .select("id", { count: "exact", head: true }),
-          supabase
-            .from("waitlist")
-            .select("id", { count: "exact", head: true }),
-          supabase
-            .from("appointments")
-            .select("id", { count: "exact", head: true })
-            .gte("start_time", new Date().toISOString().slice(0, 10))
-            .lte(
-              "start_time",
-              new Date().toISOString().slice(0, 10) + "T23:59:59Z"
-            ),
-        ]);
-
-        setCounts({
-          patients: pats.count || 0,
-          appointments: apps.count || 0,
-          waitlist: wait.count || 0,
-          todayAppointments: today.count || 0,
-        });
-      } catch (err) {
-        console.error(err);
-      }
-    }
-    load();
-  }, []);
-
-  const cardStyle: React.CSSProperties = {
-    flex: 1,
-    padding: 16,
-    borderRadius: 10,
-    background: "#fff",
-    boxShadow: "0 2px 6px rgba(0,0,0,0.05)",
-    minWidth: 160,
-  };
-
   return (
     <PageContainer title="Dashboard">
-      <div
-        style={{
-          display: "flex",
-          gap: 16,
-          flexWrap: "wrap",
-          marginBottom: 20,
-        }}
-      >
-        <div style={cardStyle}>
-          <h3>Pacientes</h3>
-          <p style={{ fontSize: 28, margin: 0 }}>{counts.patients}</p>
-        </div>
-        <div style={cardStyle}>
-          <h3>Consultas totais</h3>
-          <p style={{ fontSize: 28, margin: 0 }}>{counts.appointments}</p>
-        </div>
-        <div style={cardStyle}>
-          <h3>Consultas hoje</h3>
-          <p style={{ fontSize: 28, margin: 0 }}>{counts.todayAppointments}</p>
-        </div>
-        <div style={cardStyle}>
-          <h3>Fila de espera</h3>
-          <p style={{ fontSize: 28, margin: 0 }}>{counts.waitlist}</p>
-        </div>
-      </div>
-      <p>
-        Este painel resume o movimento da clínica. Use as abas ao lado para
-        gerenciar pacientes, agenda, fila, feriados, WhatsApp e validar
-        documentos públicos.
+      <p style={{ marginBottom: 8 }}>
+        Bem-vindo ao painel da clínica MedIntelli Basic V3.
       </p>
+      <ul>
+        <li>✅ Cadastro e consulta de pacientes</li>
+        <li>✅ Agenda semanal estilo Google (visão por dia)</li>
+        <li>✅ Fila de espera com prioridade</li>
+        <li>✅ Central de Mensagens (APP + WhatsApp + IA/Humano)</li>
+        <li>✅ Chat IA usando OpenAI + base de conhecimento da clínica</li>
+      </ul>
     </PageContainer>
   );
 }
 
-// ------- Pacientes (CRUD) -------
+// --------------------------
+// Pacientes (CRUD simples)
+// --------------------------
 function PacientesSection() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const [form, setForm] = useState({
     name: "",
     cpf: "",
     phone: "",
-    email: "",
     birth_date: "",
     notes: "",
   });
 
   async function loadPatients() {
     setLoading(true);
+    setError("");
     const { data, error } = await supabase
       .from("patients")
       .select("*")
@@ -491,7 +235,7 @@ function PacientesSection() {
 
     if (error) {
       console.error(error);
-      alert("Erro ao carregar pacientes.");
+      setError("Erro ao carregar pacientes.");
     } else {
       setPatients((data || []) as Patient[]);
     }
@@ -512,63 +256,40 @@ function PacientesSection() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) return;
+    setSaving(true);
+    setError("");
 
-    const payload = {
+    const { error } = await supabase.from("patients").insert({
       name: form.name,
       cpf: form.cpf || null,
       phone: form.phone || null,
-      email: form.email || null,
       birth_date: form.birth_date || null,
       notes: form.notes || null,
-    };
+    });
 
-    if (editingId) {
-      const { error } = await supabase
-        .from("patients")
-        .update(payload)
-        .eq("id", editingId);
-      if (error) {
-        console.error(error);
-        alert("Erro ao atualizar paciente.");
-      }
+    if (error) {
+      console.error(error);
+      setError("Erro ao salvar paciente.");
     } else {
-      const { error } = await supabase.from("patients").insert(payload);
-      if (error) {
-        console.error(error);
-        alert("Erro ao salvar paciente.");
-      }
+      setForm({
+        name: "",
+        cpf: "",
+        phone: "",
+        birth_date: "",
+        notes: "",
+      });
+      await loadPatients();
     }
 
-    setForm({
-      name: "",
-      cpf: "",
-      phone: "",
-      email: "",
-      birth_date: "",
-      notes: "",
-    });
-    setEditingId(null);
-    await loadPatients();
-  }
-
-  function handleEdit(p: Patient) {
-    setEditingId(p.id);
-    setForm({
-      name: p.name,
-      cpf: p.cpf || "",
-      phone: p.phone || "",
-      email: p.email || "",
-      birth_date: p.birth_date || "",
-      notes: p.notes || "",
-    });
+    setSaving(false);
   }
 
   async function handleDelete(id: string) {
-    if (!window.confirm("Excluir paciente? Isso remove agendamentos?")) return;
+    if (!window.confirm("Deseja realmente excluir este paciente?")) return;
     const { error } = await supabase.from("patients").delete().eq("id", id);
     if (error) {
       console.error(error);
-      alert("Erro ao excluir paciente.");
+      alert("Erro ao excluir.");
     } else {
       setPatients((prev) => prev.filter((p) => p.id !== id));
     }
@@ -576,7 +297,7 @@ function PacientesSection() {
 
   return (
     <PageContainer title="Pacientes">
-      <h3>{editingId ? "Editar paciente" : "Novo paciente"}</h3>
+      <h3>Novo paciente</h3>
       <form
         onSubmit={handleSubmit}
         style={{
@@ -594,87 +315,52 @@ function PacientesSection() {
           required
           style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
         />
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            name="cpf"
-            value={form.cpf}
-            onChange={handleChange}
-            placeholder="CPF"
-            style={{ flex: 1, padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-          />
-          <input
-            name="phone"
-            value={form.phone}
-            onChange={handleChange}
-            placeholder="Telefone"
-            style={{ flex: 1, padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-          />
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            name="email"
-            value={form.email}
-            onChange={handleChange}
-            placeholder="E-mail"
-            style={{ flex: 1, padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-          />
-          <input
-            type="date"
-            name="birth_date"
-            value={form.birth_date}
-            onChange={handleChange}
-            style={{ flex: 1, padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-          />
-        </div>
+        <input
+          name="cpf"
+          value={form.cpf}
+          onChange={handleChange}
+          placeholder="CPF (para acesso ao app paciente)"
+          style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
+        />
+        <input
+          name="phone"
+          value={form.phone}
+          onChange={handleChange}
+          placeholder="Telefone"
+          style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
+        />
+        <input
+          type="date"
+          name="birth_date"
+          value={form.birth_date}
+          onChange={handleChange}
+          style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
+        />
         <textarea
           name="notes"
           value={form.notes}
           onChange={handleChange}
           placeholder="Observações"
-          rows={2}
+          rows={3}
           style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
         />
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            type="submit"
-            style={{
-              padding: "8px 12px",
-              borderRadius: 6,
-              border: "none",
-              background: "#1a73e8",
-              color: "#fff",
-              cursor: "pointer",
-            }}
-          >
-            {editingId ? "Salvar alterações" : "Salvar paciente"}
-          </button>
-          {editingId && (
-            <button
-              type="button"
-              onClick={() => {
-                setEditingId(null);
-                setForm({
-                  name: "",
-                  cpf: "",
-                  phone: "",
-                  email: "",
-                  birth_date: "",
-                  notes: "",
-                });
-              }}
-              style={{
-                padding: "8px 12px",
-                borderRadius: 6,
-                border: "1px solid #ccc",
-                background: "#fff",
-                cursor: "pointer",
-              }}
-            >
-              Cancelar edição
-            </button>
-          )}
-        </div>
+        <button
+          type="submit"
+          disabled={saving}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 6,
+            border: "none",
+            background: "#1a73e8",
+            color: "#fff",
+            cursor: "pointer",
+          }}
+        >
+          {saving ? "Salvando..." : "Salvar paciente"}
+        </button>
       </form>
+
+      {error && <p style={{ color: "red" }}>{error}</p>}
 
       <h3>Lista de pacientes</h3>
       {loading ? (
@@ -686,35 +372,42 @@ function PacientesSection() {
           style={{
             borderCollapse: "collapse",
             width: "100%",
-            fontSize: 13,
+            fontSize: 14,
           }}
         >
           <thead>
             <tr style={{ background: "#e6f0ff" }}>
               <th style={{ border: "1px solid #ccc", padding: 6 }}>Nome</th>
               <th style={{ border: "1px solid #ccc", padding: 6 }}>CPF</th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Telefone</th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>E-mail</th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Nascimento</th>
+              <th style={{ border: "1px solid #ccc", padding: 6 }}>
+                Telefone
+              </th>
+              <th style={{ border: "1px solid #ccc", padding: 6 }}>
+                Nascimento
+              </th>
+              <th style={{ border: "1px solid #ccc", padding: 6 }}>Obs.</th>
               <th style={{ border: "1px solid #ccc", padding: 6 }}>Ações</th>
             </tr>
           </thead>
           <tbody>
             {patients.map((p) => (
               <tr key={p.id}>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>{p.name}</td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>{p.cpf || "-"}</td>
                 <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {p.phone || "-"}
+                  {p.name}
                 </td>
                 <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {p.email || "-"}
+                  {p.cpf || "-"}
+                </td>
+                <td style={{ border: "1px solid #ccc", padding: 6 }}>
+                  {p.phone || "-"}
                 </td>
                 <td style={{ border: "1px solid #ccc", padding: 6 }}>
                   {p.birth_date || "-"}
                 </td>
                 <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  <button onClick={() => handleEdit(p)}>Editar</button>{" "}
+                  {p.notes || "-"}
+                </td>
+                <td style={{ border: "1px solid #ccc", padding: 6 }}>
                   <button onClick={() => handleDelete(p.id)}>Excluir</button>
                 </td>
               </tr>
@@ -726,11 +419,21 @@ function PacientesSection() {
   );
 }
 
-// ------- Agenda -------
+// --------------------------
+// Agenda semanal (estilo Google)
+// --------------------------
+function getMonday(d: Date) {
+  const date = new Date(d);
+  const day = date.getDay(); // 0=Domingo
+  const diff = (day === 0 ? -6 : 1) - day; // segunda
+  date.setDate(date.getDate() + diff);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
 function AgendaSection() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
-  const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({
     patient_id: "",
@@ -738,35 +441,34 @@ function AgendaSection() {
     time: "",
     reason: "",
   });
+  const [weekStart, setWeekStart] = useState<Date>(() => getMonday(new Date()));
 
-  async function loadData() {
+  async function loadData(currentWeek: Date) {
     setLoading(true);
 
-    const [pats, apps, hols] = await Promise.all([
+    const monday = new Date(currentWeek);
+    const nextMonday = new Date(monday);
+    nextMonday.setDate(nextMonday.getDate() + 7);
+
+    const [pats, apps] = await Promise.all([
       supabase.from("patients").select("id,name").order("name"),
       supabase
         .from("appointments")
         .select("id,start_time,status,reason,patient_id,patients(name)")
-        .order("start_time"),
-      supabase.from("holidays").select("*").order("date"),
+        .gte("start_time", monday.toISOString())
+        .lt("start_time", nextMonday.toISOString())
+        .order("start_time", { ascending: true }),
     ]);
 
-    if (!pats.error && pats.data) {
-      setPatients(pats.data as Patient[]);
-    }
-    if (!apps.error && apps.data) {
-      setAppointments(apps.data as Appointment[]);
-    }
-    if (!hols.error && hols.data) {
-      setHolidays(hols.data as Holiday[]);
-    }
+    if (!pats.error && pats.data) setPatients(pats.data as Patient[]);
+    if (!apps.error && apps.data) setAppointments(apps.data as Appointment[]);
 
     setLoading(false);
   }
 
   useEffect(() => {
-    loadData();
-  }, []);
+    loadData(weekStart);
+  }, [weekStart]);
 
   function handleChange(
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
@@ -775,23 +477,9 @@ function AgendaSection() {
     setForm((prev) => ({ ...prev, [name]: value }));
   }
 
-  function isHoliday(dateStr: string) {
-    return holidays.some((h) => h.date === dateStr && h.is_blocked);
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.patient_id || !form.date || !form.time) return;
-
-    if (isHoliday(form.date)) {
-      if (
-        !window.confirm(
-          "A data está marcada como feriado/bloqueio. Deseja agendar mesmo assim?"
-        )
-      ) {
-        return;
-      }
-    }
 
     const start = new Date(`${form.date}T${form.time}:00`);
 
@@ -807,25 +495,76 @@ function AgendaSection() {
       alert("Erro ao agendar.");
     } else {
       setForm({ patient_id: "", date: "", time: "", reason: "" });
-      await loadData();
+      await loadData(weekStart);
     }
   }
 
-  async function updateStatus(id: string, status: string) {
-    const { error } = await supabase
-      .from("appointments")
-      .update({ status })
-      .eq("id", id);
-    if (error) {
-      console.error(error);
-      alert("Erro ao atualizar status.");
-    } else {
-      await loadData();
+  function changeWeek(delta: number) {
+    const newStart = new Date(weekStart);
+    newStart.setDate(newStart.getDate() + delta * 7);
+    setWeekStart(getMonday(newStart));
+  }
+
+  const weekDays = useMemo(() => {
+    const days: Date[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStart);
+      d.setDate(d.getDate() + i);
+      days.push(d);
+    }
+    return days;
+  }, [weekStart]);
+
+  function formatDay(d: Date) {
+    return d.toLocaleDateString("pt-BR", {
+      weekday: "short",
+      day: "2-digit",
+      month: "2-digit",
+    });
+  }
+
+  function appointmentsForDay(d: Date) {
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const day = d.getDate();
+    return appointments.filter((a) => {
+      const dt = new Date(a.start_time);
+      return (
+        dt.getFullYear() === y &&
+        dt.getMonth() === m &&
+        dt.getDate() === day
+      );
+    });
+  }
+
+  function statusColor(status: string) {
+    switch (status) {
+      case "confirmado":
+        return "#198754"; // verde
+      case "cancelado":
+        return "#dc3545"; // vermelho
+      case "concluido":
+        return "#6c757d"; // cinza
+      default:
+        return "#0d6efd"; // azul
     }
   }
+
+  const weekLabel = `${weekDays[0].toLocaleDateString("pt-BR")} - ${weekDays[
+    6
+  ].toLocaleDateString("pt-BR")}`;
 
   return (
-    <PageContainer title="Agenda da Clínica">
+    <PageContainer
+      title="Agenda semanal"
+      extra={
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => changeWeek(-1)}>{"< Semana anterior"}</button>
+          <span>{weekLabel}</span>
+          <button onClick={() => changeWeek(1)}>{"Próxima semana >"}</button>
+        </div>
+      }
+    >
       <h3>Novo agendamento</h3>
       <form
         onSubmit={handleSubmit}
@@ -858,7 +597,7 @@ function AgendaSection() {
             value={form.date}
             onChange={handleChange}
             required
-            style={{ flex: 1, padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
+            style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
           />
           <input
             type="time"
@@ -866,7 +605,7 @@ function AgendaSection() {
             value={form.time}
             onChange={handleChange}
             required
-            style={{ flex: 1, padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
+            style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
           />
         </div>
 
@@ -893,66 +632,84 @@ function AgendaSection() {
         </button>
       </form>
 
-      <h3>Consultas agendadas</h3>
+      <h3>Visão semanal (estilo Google)</h3>
       {loading ? (
         <p>Carregando...</p>
-      ) : appointments.length === 0 ? (
-        <p>Sem consultas agendadas.</p>
       ) : (
-        <table
+        <div
           style={{
-            borderCollapse: "collapse",
-            width: "100%",
-            fontSize: 13,
+            display: "grid",
+            gridTemplateColumns: "repeat(7, 1fr)",
+            gap: 8,
+            marginTop: 8,
           }}
         >
-          <thead>
-            <tr style={{ background: "#e6f0ff" }}>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Paciente</th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>
-                Data / Hora
-              </th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Status</th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Motivo</th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {appointments.map((a) => (
-              <tr key={a.id}>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {a.patients?.name || "-"}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {new Date(a.start_time).toLocaleString("pt-BR")}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {a.status}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {a.reason || "-"}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  <button onClick={() => updateStatus(a.id, "confirmado")}>
-                    Confirmar
-                  </button>{" "}
-                  <button onClick={() => updateStatus(a.id, "cancelado")}>
-                    Cancelar
-                  </button>{" "}
-                  <button onClick={() => updateStatus(a.id, "concluido")}>
-                    Concluído
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          {weekDays.map((d) => {
+            const dayAppointments = appointmentsForDay(d);
+            return (
+              <div
+                key={d.toISOString()}
+                style={{
+                  background: "#fff",
+                  borderRadius: 8,
+                  border: "1px solid #ddd",
+                  padding: 8,
+                  minHeight: 120,
+                  boxSizing: "border-box",
+                }}
+              >
+                <div
+                  style={{
+                    fontWeight: "bold",
+                    fontSize: 13,
+                    marginBottom: 4,
+                  }}
+                >
+                  {formatDay(d)}
+                </div>
+                {dayAppointments.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "#888" }}>
+                    Sem consultas
+                  </div>
+                ) : (
+                  dayAppointments.map((a) => (
+                    <div
+                      key={a.id}
+                      style={{
+                        borderLeft: `4px solid ${statusColor(a.status)}`,
+                        background: "#f8f9fa",
+                        borderRadius: 4,
+                        padding: "4px 6px",
+                        marginBottom: 4,
+                        fontSize: 12,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600 }}>
+                        {new Date(a.start_time).toLocaleTimeString("pt-BR", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}{" "}
+                        - {a.patients?.name || "Paciente"}
+                      </div>
+                      <div>Status: {a.status}</div>
+                      {a.reason && (
+                        <div style={{ color: "#555" }}>{a.reason}</div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
     </PageContainer>
   );
 }
 
-// ------- Fila de Espera -------
+// --------------------------
+// Fila de Espera
+// --------------------------
 function WaitlistSection() {
   const [items, setItems] = useState<WaitlistItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -971,7 +728,7 @@ function WaitlistSection() {
       .order("priority", { ascending: false })
       .order("created_at", { ascending: true });
 
-  if (error) {
+    if (error) {
       console.error(error);
       alert("Erro ao carregar fila de espera.");
     } else {
@@ -1025,7 +782,7 @@ function WaitlistSection() {
   }
 
   return (
-    <PageContainer title="Fila de Espera Inteligente">
+    <PageContainer title="Fila de Espera">
       <h3>Adicionar paciente à fila</h3>
       <form
         onSubmit={handleSubmit}
@@ -1093,7 +850,7 @@ function WaitlistSection() {
           style={{
             borderCollapse: "collapse",
             width: "100%",
-            fontSize: 13,
+            fontSize: 14,
           }}
         >
           <thead>
@@ -1142,428 +899,15 @@ function WaitlistSection() {
   );
 }
 
-// ------- Feriados / Bloqueios -------
-function HolidaysSection() {
-  const [holidays, setHolidays] = useState<Holiday[]>([]);
-  const [form, setForm] = useState({
-    date: "",
-    description: "",
-    is_blocked: true,
-  });
-
-  async function load() {
-    const { data, error } = await supabase
-      .from("holidays")
-      .select("*")
-      .order("date");
-    if (error) {
-      console.error(error);
-      alert("Erro ao carregar feriados.");
-    } else {
-      setHolidays((data || []) as Holiday[]);
-    }
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.date) return;
-    const { error } = await supabase.from("holidays").insert({
-      date: form.date,
-      description: form.description || null,
-      is_blocked: form.is_blocked,
-    });
-    if (error) {
-      console.error(error);
-      alert("Erro ao salvar feriado.");
-    } else {
-      setForm({ date: "", description: "", is_blocked: true });
-      await load();
-    }
-  }
-
-  async function handleDelete(id: string) {
-    if (!window.confirm("Remover feriado/bloqueio?")) return;
-    const { error } = await supabase.from("holidays").delete().eq("id", id);
-    if (error) {
-      console.error(error);
-      alert("Erro ao remover.");
-    } else {
-      setHolidays((prev) => prev.filter((h) => h.id !== id));
-    }
-  }
-
-  return (
-    <PageContainer title="Feriados e Bloqueios de Agenda">
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          display: "grid",
-          gap: 8,
-          maxWidth: 420,
-          marginBottom: 16,
-        }}
-      >
-        <input
-          type="date"
-          value={form.date}
-          onChange={(e) => setForm((p) => ({ ...p, date: e.target.value }))}
-          required
-          style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-        />
-        <input
-          placeholder="Descrição (ex.: Feriado Municipal)"
-          value={form.description}
-          onChange={(e) =>
-            setForm((p) => ({ ...p, description: e.target.value }))
-          }
-          style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-        />
-        <label style={{ fontSize: 13 }}>
-          <input
-            type="checkbox"
-            checked={form.is_blocked}
-            onChange={(e) =>
-              setForm((p) => ({ ...p, is_blocked: e.target.checked }))
-            }
-            style={{ marginRight: 6 }}
-          />
-          Bloquear agenda neste dia
-        </label>
-        <button
-          type="submit"
-          style={{
-            padding: "8px 12px",
-            borderRadius: 6,
-            border: "none",
-            background: "#1a73e8",
-            color: "#fff",
-            cursor: "pointer",
-          }}
-        >
-          Adicionar feriado/bloqueio
-        </button>
-      </form>
-
-      <h3>Lista de feriados/bloqueios</h3>
-      {holidays.length === 0 ? (
-        <p>Nenhum registro.</p>
-      ) : (
-        <table
-          style={{
-            borderCollapse: "collapse",
-            width: "100%",
-            fontSize: 13,
-          }}
-        >
-          <thead>
-            <tr style={{ background: "#e6f0ff" }}>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Data</th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>
-                Descrição
-              </th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>
-                Bloqueio
-              </th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {holidays.map((h) => (
-              <tr key={h.id}>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {h.date}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {h.description || "-"}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {h.is_blocked ? "Sim" : "Não"}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  <button onClick={() => handleDelete(h.id)}>Remover</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </PageContainer>
-  );
-}
-
-// ------- Painel Mensagens WhatsApp (config/log) -------
-function WhatsappSection() {
-  const [templates, setTemplates] = useState<WhatsTemplate[]>([]);
-  const [logs, setLogs] = useState<WhatsLog[]>([]);
-  const [form, setForm] = useState({ name: "", content: "" });
-
-  async function load() {
-    const [t, l] = await Promise.all([
-      supabase.from("whatsapp_templates").select("*").order("created_at", {
-        ascending: true,
-      }),
-      supabase
-        .from("whatsapp_logs")
-        .select("id,phone,message,status,sent_at")
-        .order("sent_at", { ascending: false })
-        .limit(50),
-    ]);
-
-    if (!t.error && t.data) setTemplates(t.data as WhatsTemplate[]);
-    if (!l.error && l.data) setLogs(l.data as WhatsLog[]);
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.name.trim() || !form.content.trim()) return;
-    const { error } = await supabase.from("whatsapp_templates").insert({
-      name: form.name,
-      content: form.content,
-    });
-    if (error) {
-      console.error(error);
-      alert("Erro ao salvar modelo.");
-    } else {
-      setForm({ name: "", content: "" });
-      await load();
-    }
-  }
-
-  return (
-    <PageContainer title="Painel de Mensagens Automáticas (WhatsApp)">
-      <p style={{ fontSize: 13, marginBottom: 10 }}>
-        Aqui você cadastra os modelos de mensagens que serão usados em
-        integrações (WhatsApp, SMS, e-mail). O envio automático pode ser
-        implementado depois, consumindo estas tabelas.
-      </p>
-
-      <h3>Novo modelo</h3>
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          display: "grid",
-          gap: 8,
-          maxWidth: 520,
-          marginBottom: 16,
-        }}
-      >
-        <input
-          value={form.name}
-          onChange={(e) =>
-            setForm((p) => ({ ...p, name: e.target.value }))
-          }
-          placeholder="Nome do modelo (ex.: Confirmação de consulta)"
-          style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-        />
-        <textarea
-          value={form.content}
-          onChange={(e) =>
-            setForm((p) => ({ ...p, content: e.target.value }))
-          }
-          placeholder="Conteúdo da mensagem..."
-          rows={3}
-          style={{ padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-        />
-        <button
-          type="submit"
-          style={{
-            padding: "8px 12px",
-            borderRadius: 6,
-            border: "none",
-            background: "#1a73e8",
-            color: "#fff",
-            cursor: "pointer",
-          }}
-        >
-          Salvar modelo
-        </button>
-      </form>
-
-      <h3>Modelos cadastrados</h3>
-      {templates.length === 0 ? (
-        <p>Nenhum modelo cadastrado.</p>
-      ) : (
-        <ul style={{ paddingLeft: 16, fontSize: 13 }}>
-          {templates.map((t) => (
-            <li key={t.id} style={{ marginBottom: 6 }}>
-              <strong>{t.name}:</strong> {t.content}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <h3 style={{ marginTop: 16 }}>Últimos envios registrados</h3>
-      {logs.length === 0 ? (
-        <p>Nenhum envio registrado (integração futura).</p>
-      ) : (
-        <table
-          style={{
-            borderCollapse: "collapse",
-            width: "100%",
-            fontSize: 12,
-          }}
-        >
-          <thead>
-            <tr style={{ background: "#e6f0ff" }}>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Telefone</th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>
-                Mensagem
-              </th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Status</th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>
-                Data/Hora
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {logs.map((l) => (
-              <tr key={l.id}>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {l.phone}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {l.message}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {l.status}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {new Date(l.sent_at).toLocaleString("pt-BR")}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </PageContainer>
-  );
-}
-
-// ------- Validação Pública -------
-function ValidationSection() {
-  const [code, setCode] = useState("");
-  const [record, setRecord] = useState<ValidationRecord | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  async function handleSearch(e: React.FormEvent) {
-    e.preventDefault();
-    if (!code.trim()) return;
-    setLoading(true);
-    setError("");
-    setRecord(null);
-
-    const { data, error } = await supabase
-      .from("public_validations")
-      .select("*")
-      .eq("code", code.trim())
-      .maybeSingle();
-
-    if (error) {
-      console.error(error);
-      setError("Erro ao consultar validação.");
-    } else if (!data) {
-      setError("Código não encontrado.");
-    } else {
-      setRecord(data as ValidationRecord);
-    }
-
-    setLoading(false);
-  }
-
-  return (
-    <PageContainer title="Tela de Validação Pública">
-      <p style={{ fontSize: 13, marginBottom: 8 }}>
-        Esta tela pode ser disponibilizada em um site público para validar
-        atestados, laudos, receitas e outros documentos emitidos pela clínica.
-      </p>
-
-      <form
-        onSubmit={handleSearch}
-        style={{
-          display: "flex",
-          gap: 8,
-          maxWidth: 420,
-          marginBottom: 12,
-        }}
-      >
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          placeholder="Digite o código do documento"
-          style={{ flex: 1, padding: 8, borderRadius: 6, border: "1px solid #ccc" }}
-        />
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            padding: "8px 12px",
-            borderRadius: 6,
-            border: "none",
-            background: "#1a73e8",
-            color: "#fff",
-            cursor: "pointer",
-          }}
-        >
-          Consultar
-        </button>
-      </form>
-
-      {loading && <p>Consultando...</p>}
-      {error && <p style={{ color: "red", fontSize: 13 }}>{error}</p>}
-
-      {record && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: 12,
-            borderRadius: 8,
-            background: "#f2f9ff",
-            border: "1px solid #c6ddff",
-            maxWidth: 520,
-          }}
-        >
-          <p>
-            <strong>Código:</strong> {record.code}
-          </p>
-          <p>
-            <strong>Paciente:</strong> {record.patient_name || "-"}
-          </p>
-          <p>
-            <strong>Tipo de documento:</strong> {record.doc_type || "-"}
-          </p>
-          <p>
-            <strong>Situação:</strong>{" "}
-            {record.valid ? "Documento VÁLIDO" : "Documento INVÁLIDO/REVOGADO"}
-          </p>
-          {record.doc_url && (
-            <p>
-              <a href={record.doc_url} target="_blank">
-                Abrir documento
-              </a>
-            </p>
-          )}
-        </div>
-      )}
-    </PageContainer>
-  );
-}
-
-// ------- Chat IA da Clínica -------
+// --------------------------
+// Chat IA simples
+// --------------------------
 function ChatSection() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
       content:
-        "Olá! Sou o assistente virtual da clínica MedIntelli. Como posso ajudar?",
+        "Olá! Sou o assistente da clínica MedIntelli. Como posso ajudar hoje?",
     },
   ]);
   const [input, setInput] = useState("");
@@ -1591,7 +935,7 @@ function ChatSection() {
       const payload = {
         model: "gpt-4o-mini",
         messages: [
-          { role: "system" as const, content: CLINIC_KB },
+          { role: "system" as const, content: CLINIC_KNOWLEDGE_BASE },
           ...newMessages,
         ],
       };
@@ -1628,9 +972,10 @@ function ChatSection() {
 
   return (
     <PageContainer title="Chat IA da Clínica">
-      <p style={{ fontSize: 13, color: "#555", marginBottom: 10 }}>
-        Use este chat para respostas rápidas de atendimento, orientações gerais
-        e apoio à recepção. Não substitui decisão médica.
+      <p style={{ fontSize: 14, color: "#555", marginBottom: 10 }}>
+        Chat automático usando OpenAI + base de conhecimento da clínica.
+        <br />
+        Não substitui consulta médica.
       </p>
 
       <div
@@ -1707,166 +1052,472 @@ function ChatSection() {
   );
 }
 
-// ------- Painel Médico (simplificado) -------
-function MedicoSection() {
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
+// --------------------------
+// Central de Mensagens (Clínica)
+// --------------------------
+function MessagesSection() {
+  const [allMessages, setAllMessages] = useState<MessageRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
 
-  async function load() {
+  async function loadMessages() {
     setLoading(true);
-    const today = new Date().toISOString().slice(0, 10);
     const { data, error } = await supabase
-      .from("appointments")
-      .select("id,start_time,status,reason,patients(name)")
-      .gte("start_time", today)
-      .lte("start_time", today + "T23:59:59Z")
-      .order("start_time");
+      .from("messages")
+      .select("id,channel,external_id,patient_id,direction,source,content,status,created_at,patients(name)")
+      .order("created_at", { ascending: false });
+
     if (error) {
       console.error(error);
-      alert("Erro ao carregar agenda do médico.");
+      setError("Erro ao carregar mensagens.");
     } else {
-      setAppointments((data || []) as Appointment[]);
+      setAllMessages((data || []) as MessageRow[]);
     }
     setLoading(false);
   }
 
   useEffect(() => {
-    load();
+    loadMessages();
   }, []);
 
-  return (
-    <PageContainer title="Painel do Médico - Hoje">
-      {loading ? (
-        <p>Carregando...</p>
-      ) : appointments.length === 0 ? (
-        <p>Sem consultas para hoje.</p>
-      ) : (
-        <table
-          style={{
-            borderCollapse: "collapse",
-            width: "100%",
-            fontSize: 13,
-          }}
-        >
-          <thead>
-            <tr style={{ background: "#e6f0ff" }}>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Paciente</th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>
-                Horário
-              </th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Status</th>
-              <th style={{ border: "1px solid #ccc", padding: 6 }}>Motivo</th>
-            </tr>
-          </thead>
-          <tbody>
-            {appointments.map((a) => (
-              <tr key={a.id}>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {a.patients?.name || "-"}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {new Date(a.start_time).toLocaleTimeString("pt-BR", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {a.status}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: 6 }}>
-                  {a.reason || "-"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </PageContainer>
-  );
-}
+  const conversations: Conversation[] = useMemo(() => {
+    const map = new Map<string, Conversation>();
 
-// ------- Configurações -------
-function ConfigSection() {
-  return (
-    <PageContainer title="Configurações da Clínica">
-      <p>
-        Nesta versão, as principais configurações ficam em variáveis de
-        ambiente e no Supabase:
-      </p>
-      <ul>
-        <li>🔑 <strong>Supabase</strong>: URL e ANON KEY (VITE_SUPABASE_*)</li>
-        <li>🤖 <strong>OpenAI</strong>: VITE_OPENAI_API_KEY</li>
-        <li>🗄️ Tabelas: patients, appointments, waitlist, holidays, etc.</li>
-        <li>
-          📲 Integrações de WhatsApp/SMS: a serem implementadas usando as
-          tabelas de templates e logs.
-        </li>
-      </ul>
-      <p style={{ marginTop: 8 }}>
-        Ajustes visuais podem ser feitos diretamente neste arquivo App.tsx, em
-        cada seção.
-      </p>
-    </PageContainer>
-  );
-}
+    for (const msg of allMessages) {
+      const key =
+        (msg.external_id || "sem-id") + "|" + (msg.patient_id || "sem-paciente");
+      const existing = map.get(key);
 
-// ------- App principal -------
-export default function App() {
-  const [section, setSection] = useState<Section>("dashboard");
-  const [session, setSession] = useState<UserSession | null>(null);
-
-  useEffect(() => {
-    const raw = localStorage.getItem("medintelli_clinica_session");
-    if (raw) {
-      try {
-        setSession(JSON.parse(raw));
-      } catch {
-        // ignore
+      if (!existing) {
+        map.set(key, {
+          key,
+          title:
+            msg.patients?.name ||
+            msg.external_id ||
+            "Contato sem identificação",
+          lastMessage: msg,
+          channel: msg.channel,
+          status: msg.status,
+        });
+      } else {
+        // como está ordenado da mais recente p/ mais antiga, o primeiro é o mais atual
+        continue;
       }
-    } else {
-      setSection("login");
     }
-  }, []);
 
-  function handleLogin(s: UserSession) {
-    setSession(s);
-    setSection("dashboard");
+    return Array.from(map.values());
+  }, [allMessages]);
+
+  const selectedMessages = useMemo(() => {
+    if (!selectedKey) return [];
+    const [ext, pid] = selectedKey.split("|");
+    return allMessages
+      .filter(
+        (m) =>
+          (m.external_id || "sem-id") === ext &&
+          (m.patient_id || "sem-paciente") === pid
+      )
+      .sort(
+        (a, b) =>
+          new Date(a.created_at).getTime() -
+          new Date(b.created_at).getTime()
+      );
+  }, [selectedKey, allMessages]);
+
+  async function sendMessage(source: "ia" | "humano") {
+    if (!selectedKey || !reply.trim()) return;
+    setSending(true);
+    setError("");
+
+    const [ext, pid] = selectedKey.split("|");
+    const patient_id = pid === "sem-paciente" ? null : pid;
+
+    try {
+      // 1) Inserir mensagem no Supabase
+      const { error } = await supabase.from("messages").insert({
+        channel: "whatsapp", // ajustar se for outro canal
+        external_id: ext === "sem-id" ? null : ext,
+        patient_id,
+        direction: "out",
+        source,
+        content: reply,
+        status: "em_atendimento",
+      });
+
+      if (error) {
+        console.error(error);
+        setError("Erro ao salvar mensagem.");
+      } else {
+        setReply("");
+        await loadMessages();
+      }
+
+      // 2) (Opcional) chamar backend para enviar via AVISA API:
+      // await fetch("/api/send-whatsapp", { method: "POST", body: JSON.stringify({ to: ext, text: reply }) });
+
+    } catch (e) {
+      console.error(e);
+      setError("Falha ao enviar mensagem.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function sendWithIA() {
+    if (!selectedKey || !reply.trim()) return;
+
+    setSending(true);
+    setError("");
+
+    try {
+      const apiKey = import.meta.env.VITE_OPENAI_API_KEY as string;
+      if (!apiKey) {
+        setError("VITE_OPENAI_API_KEY não configurado.");
+        setSending(false);
+        return;
+      }
+
+      const historyText = selectedMessages
+        .map(
+          (m) =>
+            `${m.direction === "in" ? "Paciente" : "Clínica"}: ${m.content}`
+        )
+        .join("\n");
+
+      const prompt = `
+Você é o assistente da clínica MedIntelli.
+
+Histórico recente:
+${historyText}
+
+Nova pergunta / mensagem do paciente:
+${reply}
+
+Responda de forma objetiva, educada, sem diagnóstico, focando em:
+- orientações gerais
+- explicação de horários
+- orientação para ligar ou procurar atendimento quando necessário.
+`;
+
+      const payload = {
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system" as const, content: CLINIC_KNOWLEDGE_BASE },
+          { role: "user" as const, content: prompt },
+        ],
+      };
+
+      const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!resp.ok) {
+        throw new Error("Erro API OpenAI: " + resp.status);
+      }
+
+      const data = await resp.json();
+      const answer: string =
+        data.choices?.[0]?.message?.content ||
+        "Desculpe, não consegui gerar uma resposta agora.";
+
+      const [ext, pid] = selectedKey.split("|");
+      const patient_id = pid === "sem-paciente" ? null : pid;
+
+      const { error } = await supabase.from("messages").insert({
+        channel: "whatsapp",
+        external_id: ext === "sem-id" ? null : ext,
+        patient_id,
+        direction: "out",
+        source: "ia",
+        content: answer,
+        status: "em_atendimento",
+      });
+
+      if (error) {
+        console.error(error);
+        setError("Erro ao salvar resposta da IA.");
+      } else {
+        setReply("");
+        await loadMessages();
+      }
+
+      // (Opcional) enviar essa resposta via AVISA API no backend
+
+    } catch (e) {
+      console.error(e);
+      setError("Falha ao gerar resposta da IA.");
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
-    <div style={{ display: "flex", fontFamily: "system-ui, sans-serif" }}>
-      {session && (
-        <Sidebar
-          active={section}
-          onChange={setSection}
-          session={session}
-        />
-      )}
+    <PageContainer title="Central de Mensagens">
+      <p style={{ fontSize: 14, color: "#555", marginBottom: 8 }}>
+        Aqui você acompanha todas as conversas do APP e WhatsApp.
+        <br />
+        Integração com AVISA API deve ser feita via backend / Edge Functions.
+      </p>
+
       <div
         style={{
-          flex: 1,
-          background: "#f5f5f5",
-          minHeight: "100vh",
+          display: "grid",
+          gridTemplateColumns: "260px 1fr",
+          gap: 12,
+          height: 480,
         }}
       >
-        {!session || section === "login" ? (
-          <LoginSection onLogin={handleLogin} />
-        ) : (
-          <>
-            {section === "dashboard" && <DashboardSection />}
-            {section === "pacientes" && <PacientesSection />}
-            {section === "agenda" && <AgendaSection />}
-            {section === "waitlist" && <WaitlistSection />}
-            {section === "holidays" && <HolidaysSection />}
-            {section === "whatsapp" && <WhatsappSection />}
-            {section === "validation" && <ValidationSection />}
-            {section === "chat" && <ChatSection />}
-            {section === "medico" && <MedicoSection />}
-            {section === "config" && <ConfigSection />}
-          </>
-        )}
+        {/* Lista de conversas */}
+        <div
+          style={{
+            border: "1px solid #ccc",
+            borderRadius: 8,
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <div
+            style={{
+              padding: 8,
+              background: "#f1f3f5",
+              fontWeight: 600,
+              fontSize: 14,
+            }}
+          >
+            Conversas
+          </div>
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+            }}
+          >
+            {loading ? (
+              <p style={{ padding: 8 }}>Carregando...</p>
+            ) : conversations.length === 0 ? (
+              <p style={{ padding: 8, fontSize: 13 }}>Nenhuma conversa ainda.</p>
+            ) : (
+              conversations.map((c) => (
+                <button
+                  key={c.key}
+                  onClick={() => setSelectedKey(c.key)}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    border: "none",
+                    borderBottom: "1px solid #eee",
+                    padding: 8,
+                    background:
+                      selectedKey === c.key ? "#e7f1ff" : "transparent",
+                    cursor: "pointer",
+                    fontSize: 13,
+                  }}
+                >
+                  <div style={{ fontWeight: 600 }}>{c.title}</div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "#666",
+                      marginTop: 2,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {c.lastMessage.content}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "#999",
+                      marginTop: 2,
+                    }}
+                  >
+                    {c.channel.toUpperCase()} • {c.status}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Chat da conversa selecionada */}
+        <div
+          style={{
+            border: "1px solid #ccc",
+            borderRadius: 8,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <div
+            style={{
+              padding: 8,
+              background: "#f1f3f5",
+              fontWeight: 600,
+              fontSize: 14,
+            }}
+          >
+            {selectedKey
+              ? "Histórico da conversa"
+              : "Selecione uma conversa à esquerda"}
+          </div>
+
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: 8,
+              background: "#fafafa",
+            }}
+          >
+            {!selectedKey ? (
+              <p style={{ fontSize: 13, color: "#666" }}>
+                Nenhuma conversa selecionada.
+              </p>
+            ) : selectedMessages.length === 0 ? (
+              <p style={{ fontSize: 13, color: "#666" }}>
+                Sem mensagens ainda nessa conversa.
+              </p>
+            ) : (
+              selectedMessages.map((m) => (
+                <div
+                  key={m.id}
+                  style={{
+                    textAlign: m.direction === "in" ? "left" : "right",
+                    marginBottom: 6,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "inline-block",
+                      padding: "6px 10px",
+                      borderRadius: 10,
+                      background:
+                        m.direction === "in" ? "#e0e0e0" : "#1a73e8",
+                      color: m.direction === "in" ? "#000" : "#fff",
+                      maxWidth: "80%",
+                      whiteSpace: "pre-wrap",
+                      fontSize: 13,
+                    }}
+                  >
+                    {m.content}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 10,
+                      color: "#888",
+                      marginTop: 2,
+                    }}
+                  >
+                    {new Date(m.created_at).toLocaleString("pt-BR")} •{" "}
+                    {m.source === "ia" ? "IA" : "Humano"}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Caixa de resposta */}
+          <div
+            style={{
+              borderTop: "1px solid #ddd",
+              padding: 8,
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
+            <textarea
+              value={reply}
+              onChange={(e) => setReply(e.target.value)}
+              placeholder="Digite sua resposta..."
+              rows={2}
+              style={{
+                width: "100%",
+                resize: "vertical",
+                padding: 6,
+                borderRadius: 6,
+                border: "1px solid #ccc",
+                fontSize: 13,
+              }}
+              disabled={!selectedKey || sending}
+            />
+            {error && (
+              <div style={{ color: "red", fontSize: 12 }}>{error}</div>
+            )}
+            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => sendMessage("humano")}
+                disabled={!selectedKey || sending || !reply.trim()}
+              >
+                Enviar como humano
+              </button>
+              <button
+                onClick={sendWithIA}
+                disabled={!selectedKey || sending || !reply.trim()}
+              >
+                Gerar resposta com IA
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </PageContainer>
+  );
+}
+
+// --------------------------
+// Config (placeholder)
+// --------------------------
+function ConfigSection() {
+  return (
+    <PageContainer title="Configurações">
+      <p>
+        Aqui você poderá configurar usuários, permissões, horários padrão,
+        mensagens automáticas etc.
+      </p>
+      <p style={{ marginTop: 8 }}>
+        Principais pontos técnicos hoje:
+      </p>
+      <ul>
+        <li>🔑 Variáveis de ambiente (Supabase e OpenAI)</li>
+        <li>🗄️ Tabelas do Supabase (patients, appointments, waitlist, messages)</li>
+        <li>🤖 Ajustar a base de conhecimento da clínica (CLINIC_KNOWLEDGE_BASE)</li>
+        <li>📲 Integração WhatsApp via AVISA API (no backend)</li>
+      </ul>
+    </PageContainer>
+  );
+}
+
+// --------------------------
+// App principal
+// --------------------------
+export default function App() {
+  const [section, setSection] = useState<Section>("dashboard");
+
+  return (
+    <div style={{ display: "flex", fontFamily: "system-ui, sans-serif" }}>
+      <Sidebar active={section} onChange={setSection} />
+      <div style={{ flex: 1, background: "#f5f5f5", minHeight: "100vh" }}>
+        {section === "dashboard" && <DashboardSection />}
+        {section === "pacientes" && <PacientesSection />}
+        {section === "agenda" && <AgendaSection />}
+        {section === "waitlist" && <WaitlistSection />}
+        {section === "chat" && <ChatSection />}
+        {section === "mensagens" && <MessagesSection />}
+        {section === "config" && <ConfigSection />}
       </div>
     </div>
   );
 }
-
