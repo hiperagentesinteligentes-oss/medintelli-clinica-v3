@@ -1,5 +1,4 @@
-
-// src/App.tsx - MedIntelli Clínica V3
+// src/App.tsx - MedIntelli Clínica V3 com Painel Médico
 // --------------------------------------------------
 // Requisitos:
 // - Variáveis de ambiente no Vercel:
@@ -7,16 +6,15 @@
 //   VITE_SUPABASE_ANON_KEY
 //   VITE_OPENAI_API_KEY
 //
-// - Tabelas usadas (já criadas):
+// - Tabelas usadas:
 //   patients
 //   appointments_full
 //   waitlist_full
 //   messages_center
-//   clinic_users
-//   documents
+//   clinic_users (opcional, ainda não usado aqui)
+//   documents (para exames, se desejar)
 //   medical_notes
 //   settings
-//
 // --------------------------------------------------
 
 import React, {
@@ -55,10 +53,9 @@ type Section =
   | "agenda"
   | "waitlist"
   | "messages"
+  | "doctor"
   | "chat"
   | "config";
-
-type UserRole = "A" | "B" | "C";
 
 type Patient = {
   id: string;
@@ -78,7 +75,7 @@ type AppointmentFull = {
   start_time: string;
   end_time: string | null;
   status: string;
-  patients?: { name: string } | null;
+  patients?: { id: string; name: string; phone?: string | null } | null;
 };
 
 type WaitlistFull = {
@@ -105,6 +102,13 @@ type MessageCenter = {
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
+};
+
+type MedicalNote = {
+  id: string;
+  patient_id: string;
+  note: string;
+  created_at: string;
 };
 
 // --------------------------------------------------
@@ -142,6 +146,7 @@ function Sidebar(props: {
     { id: "agenda", label: "Agenda" },
     { id: "waitlist", label: "Fila de Espera" },
     { id: "messages", label: "Central Clínica" },
+    { id: "doctor", label: "Painel Médico" },
     { id: "chat", label: "Chat IA" },
     { id: "config", label: "Configurações" },
   ];
@@ -253,6 +258,9 @@ function DashboardSection() {
           <li>
             Use o <strong>Chat IA</strong> para dúvidas rápidas.
           </li>
+          <li>
+            Registre evolução no <strong>Painel Médico</strong>.
+          </li>
         </ol>
       </div>
     </PageShell>
@@ -316,9 +324,11 @@ function PatientsSection() {
     setSaving(true);
     setError("");
 
+    const cleanCpf = form.cpf ? form.cpf.replace(/\D/g, "") : null;
+
     const { error } = await supabase.from("patients").insert({
       name: form.name,
-      cpf: form.cpf || null,
+      cpf: cleanCpf,
       phone: form.phone || null,
       birth_date: form.birth_date || null,
       notes: form.notes || null,
@@ -502,7 +512,9 @@ function AgendaSection() {
       supabase.from("patients").select("id,name").order("name"),
       supabase
         .from("appointments_full")
-        .select("id,title,description,start_time,end_time,status,patients(name)")
+        .select(
+          "id,title,description,start_time,end_time,status,patient_id,patients(id,name)"
+        )
         .order("start_time", { ascending: true }),
     ]);
 
@@ -511,7 +523,7 @@ function AgendaSection() {
     }
 
     if (!apps.error && apps.data) {
-      const mapped = (apps.data as AppointmentFull[]).map((a) => ({
+      const mapped = (apps.data as AppointmentFull[]).map((a: any) => ({
         id: a.id,
         title: a.title || a.patients?.name || "Consulta",
         start: a.start_time,
@@ -692,7 +704,7 @@ function AgendaSection() {
             events={events}
             eventClassNames={(arg) =>
               `text-xs text-white border ${eventClass(
-                arg.event.extendedProps.status
+                (arg.event.extendedProps as any)?.status
               )}`
             }
             headerToolbar={{
@@ -1089,6 +1101,301 @@ function MessagesSection() {
 }
 
 // --------------------------------------------------
+// PAINEL MÉDICO (consultas do dia + evolução)
+// --------------------------------------------------
+
+function DoctorPanelSection() {
+  const [date, setDate] = useState<string>(() => {
+    const today = new Date();
+    return today.toISOString().slice(0, 10); // yyyy-mm-dd
+  });
+
+  const [appointments, setAppointments] = useState<AppointmentFull[]>([]);
+  const [selected, setSelected] = useState<AppointmentFull | null>(null);
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+  const [notes, setNotes] = useState<MedicalNote[]>([]);
+  const [newNote, setNewNote] = useState("");
+  const [loadingList, setLoadingList] = useState(true);
+  const [loadingNotes, setLoadingNotes] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    loadAppointments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date]);
+
+  async function loadAppointments() {
+    if (!supabase) return;
+    setLoadingList(true);
+
+    const startDay = new Date(date + "T00:00:00");
+    const endDay = new Date(date + "T23:59:59");
+
+    const { data, error } = await supabase
+      .from("appointments_full")
+      .select(
+        "id,title,description,start_time,end_time,status,patient_id,patients(id,name,phone)"
+      )
+      .gte("start_time", startDay.toISOString())
+      .lte("start_time", endDay.toISOString())
+      .order("start_time", { ascending: true });
+
+    if (error) {
+      console.error(error);
+      alert("Erro ao carregar consultas do dia.");
+      setLoadingList(false);
+      return;
+    }
+
+    setAppointments(data as any);
+    setSelected(null);
+    setSelectedPatient(null);
+    setNotes([]);
+    setLoadingList(false);
+  }
+
+  async function loadNotes(patientId: string) {
+    if (!supabase) return;
+    setLoadingNotes(true);
+
+    const { data, error } = await supabase
+      .from("medical_notes")
+      .select("*")
+      .eq("patient_id", patientId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error(error);
+      alert("Erro ao carregar anotações médicas.");
+      setLoadingNotes(false);
+      return;
+    }
+
+    setNotes((data || []) as MedicalNote[]);
+    setLoadingNotes(false);
+  }
+
+  async function handleSelectAppointment(app: AppointmentFull) {
+    setSelected(app);
+
+    if (!supabase || !app.patient_id) {
+      setSelectedPatient(null);
+      setNotes([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("patients")
+      .select("*")
+      .eq("id", app.patient_id)
+      .maybeSingle();
+
+    if (!error && data) {
+      setSelectedPatient(data as Patient);
+      await loadNotes(data.id);
+    } else {
+      setSelectedPatient(null);
+      setNotes([]);
+    }
+  }
+
+  async function handleSaveNote(e: FormEvent) {
+    e.preventDefault();
+    if (!supabase || !selectedPatient || !newNote.trim()) return;
+    setSaving(true);
+
+    const { error } = await supabase.from("medical_notes").insert({
+      patient_id: selectedPatient.id,
+      note: newNote,
+    });
+
+    if (error) {
+      console.error(error);
+      alert("Erro ao salvar anotação.");
+      setSaving(false);
+      return;
+    }
+
+    setNewNote("");
+    await loadNotes(selectedPatient.id);
+    setSaving(false);
+  }
+
+  function statusBadge(status: string) {
+    const base = "inline-flex px-2 py-0.5 rounded-full text-[11px] border ";
+    switch (status) {
+      case "confirmado":
+        return base + "bg-emerald-50 text-emerald-700 border-emerald-300";
+      case "cancelado":
+        return base + "bg-red-50 text-red-700 border-red-300";
+      case "concluido":
+        return base + "bg-slate-50 text-slate-700 border-slate-300";
+      default:
+        return base + "bg-blue-50 text-blue-700 border-blue-300";
+    }
+  }
+
+  return (
+    <PageShell
+      title="Painel Médico"
+      subtitle="Consultas do dia e evolução por paciente."
+    >
+      <div className="grid lg:grid-cols-[340px,1fr] gap-6">
+        {/* Lista de consultas */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 text-sm">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold text-slate-800">
+              Consultas do dia
+            </h2>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="px-2 py-1 rounded-lg border border-slate-300 text-xs"
+            />
+          </div>
+
+          {loadingList ? (
+            <p className="text-xs text-slate-500">Carregando...</p>
+          ) : appointments.length === 0 ? (
+            <p className="text-xs text-slate-500">
+              Nenhuma consulta para a data selecionada.
+            </p>
+          ) : (
+            <div className="space-y-2 max-h-[460px] overflow-y-auto">
+              {appointments.map((a: any) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => handleSelectAppointment(a)}
+                  className={`w-full text-left border rounded-lg px-3 py-2 hover:bg-slate-50 ${
+                    selected?.id === a.id
+                      ? "border-blue-500 bg-blue-50"
+                      : "border-slate-200 bg-white"
+                  }`}
+                >
+                  <div className="flex justify-between items-center">
+                    <div className="font-semibold text-xs text-slate-800">
+                      {a.title || a.patients?.name || "Consulta"}
+                    </div>
+                    <span className={statusBadge(a.status)}>
+                      {a.status}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-1">
+                    {new Date(a.start_time).toLocaleTimeString("pt-BR", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}{" "}
+                    · {a.patients?.name || "Sem paciente vinculado"}
+                  </div>
+                  {a.description && (
+                    <div className="text-[11px] text-slate-500 mt-1">
+                      {a.description}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Detalhes + evolução */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 text-sm">
+          {!selected ? (
+            <p className="text-xs text-slate-500">
+              Selecione uma consulta ao lado para ver os detalhes.
+            </p>
+          ) : (
+            <>
+              <h2 className="font-semibold text-slate-800 mb-1">
+                Detalhes da consulta
+              </h2>
+              <div className="text-xs text-slate-600 mb-3">
+                <div>
+                  <strong>Paciente:</strong>{" "}
+                  {selectedPatient?.name || "Sem paciente"}
+                </div>
+                {selectedPatient?.cpf && (
+                  <div>
+                    <strong>CPF:</strong> {selectedPatient.cpf}
+                  </div>
+                )}
+                {selectedPatient?.phone && (
+                  <div>
+                    <strong>Telefone:</strong> {selectedPatient.phone}
+                  </div>
+                )}
+                <div>
+                  <strong>Data/Hora:</strong>{" "}
+                  {new Date(selected.start_time).toLocaleString("pt-BR")}
+                </div>
+                <div>
+                  <strong>Status:</strong>{" "}
+                  <span className="capitalize">{selected.status}</span>
+                </div>
+                {selected.description && (
+                  <div className="mt-1">
+                    <strong>Motivo:</strong> {selected.description}
+                  </div>
+                )}
+              </div>
+
+              <hr className="my-3" />
+
+              <h3 className="font-semibold text-slate-800 mb-2 text-sm">
+                Anotações médicas
+              </h3>
+
+              {loadingNotes ? (
+                <p className="text-xs text-slate-500">Carregando...</p>
+              ) : notes.length === 0 ? (
+                <p className="text-xs text-slate-500 mb-2">
+                  Nenhuma anotação registrada para este paciente.
+                </p>
+              ) : (
+                <div className="max-h-40 overflow-y-auto mb-3 space-y-2 text-xs">
+                  {notes.map((n) => (
+                    <div
+                      key={n.id}
+                      className="border border-slate-200 rounded-lg px-2 py-1 bg-slate-50"
+                    >
+                      <div className="text-[10px] text-slate-500 mb-1">
+                        {new Date(n.created_at).toLocaleString("pt-BR")}
+                      </div>
+                      <div className="whitespace-pre-wrap text-slate-700">
+                        {n.note}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <form onSubmit={handleSaveNote} className="space-y-2">
+                <textarea
+                  value={newNote}
+                  onChange={(e) => setNewNote(e.target.value)}
+                  placeholder="Escreva aqui a evolução, orientações ou hipóteses clínicas (sem prescrição)."
+                  rows={4}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs"
+                />
+                <button
+                  type="submit"
+                  disabled={saving || !selectedPatient}
+                  className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {saving ? "Salvando..." : "Salvar anotação"}
+                </button>
+              </form>
+            </>
+          )}
+        </div>
+      </div>
+    </PageShell>
+  );
+}
+
+// --------------------------------------------------
 // CHAT IA
 // --------------------------------------------------
 
@@ -1279,6 +1586,7 @@ export default function App() {
       {section === "agenda" && <AgendaSection />}
       {section === "waitlist" && <WaitlistSection />}
       {section === "messages" && <MessagesSection />}
+      {section === "doctor" && <DoctorPanelSection />}
       {section === "chat" && <ChatSection />}
       {section === "config" && <ConfigSection />}
     </div>
