@@ -1,90 +1,75 @@
-// src/App.tsx - MedIntelli Clínica V3 com Painel Médico
-// --------------------------------------------------
-// Requisitos:
-// - Variáveis de ambiente no Vercel:
-//   VITE_SUPABASE_URL
-//   VITE_SUPABASE_ANON_KEY
-//   VITE_OPENAI_API_KEY
-//
-// - Tabelas usadas:
-//   patients
-//   appointments_full
-//   waitlist_full
-//   messages_center
-//   clinic_users (opcional, ainda não usado aqui)
-//   documents (para exames, se desejar)
-//   medical_notes
-//   settings
-// --------------------------------------------------
+// src/App.tsx – MedIntelli Clínica V3
+// Layout tipo ERP (igual PDF), com:
+// - Dashboard
+// - Pacientes (CRUD)
+// - Agenda (FullCalendar)
+// - Fila de Espera
+// - Central Clínica (WhatsApp + IA)
+// - Configurações
 
-import React, {
-  useEffect,
-  useState,
-  ChangeEvent,
-  FormEvent,
-} from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-
 import FullCalendar from "@fullcalendar/react";
 import dayGridPlugin from "@fullcalendar/daygrid";
 import timeGridPlugin from "@fullcalendar/timegrid";
-import interactionPlugin from "@fullcalendar/interaction";
+import interactionPlugin, { DateClickArg } from "@fullcalendar/interaction";
 
-// --------------------------------------------------
-// Supabase client
-// --------------------------------------------------
+// =============================
+//  SUPABASE CLIENT
+// =============================
+
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+const supabaseAnonKey = import.meta.env
+  .VITE_SUPABASE_ANON_KEY as string | undefined;
 
-if (!supabaseUrl || !supabaseKey) {
+let supabase: SupabaseClient | null = null;
+
+if (!supabaseUrl || !supabaseAnonKey) {
   console.warn("⚠️ Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.");
+} else {
+  supabase = createClient(supabaseUrl, supabaseAnonKey);
 }
 
-const supabase: SupabaseClient | null =
-  supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
-
-// --------------------------------------------------
-// Tipos
-// --------------------------------------------------
+// =============================
+//  TIPOS
+// =============================
 
 type Section =
   | "dashboard"
-  | "patients"
+  | "pacientes"
   | "agenda"
   | "waitlist"
-  | "messages"
-  | "doctor"
-  | "chat"
+  | "central"
   | "config";
 
 type Patient = {
   id: string;
   name: string;
-  cpf?: string | null;
-  phone?: string | null;
-  birth_date?: string | null;
-  notes?: string | null;
-  created_at?: string;
+  phone: string | null;
+  birth_date: string | null;
+  document: string | null;
+  email: string | null;
+  notes: string | null;
+  created_at: string;
 };
 
-type AppointmentFull = {
+type Appointment = {
   id: string;
-  patient_id: string | null;
-  title: string;
-  description: string | null;
+  patient_id: string;
   start_time: string;
   end_time: string | null;
   status: string;
-  patients?: { id: string; name: string; phone?: string | null } | null;
+  reason: string | null;
+  created_at: string;
+  patients?: { name: string };
 };
 
-type WaitlistFull = {
+type WaitlistItem = {
   id: string;
   patient_name: string;
   phone: string | null;
-  priority: number;
   reason: string | null;
-  status: string;
+  priority: number;
   created_at: string;
 };
 
@@ -94,47 +79,46 @@ type MessageCenter = {
   sender_name: string | null;
   phone: string | null;
   message: string;
-  direction: "in" | "out" | string;
-  channel: string;
+  direction: "in" | "out";
+  channel: "whatsapp" | "app" | "interno";
+  category: string | null;
   created_at: string;
 };
 
-type ChatMessage = {
-  role: "user" | "assistant";
-  content: string;
+type MessageCategory = {
+  id: number;
+  name: string;
+  color: string | null;
+  description: string | null;
 };
 
-type MedicalNote = {
-  id: string;
-  patient_id: string;
-  note: string;
-  created_at: string;
-};
+// =============================
+//  LAYOUT (ERP STYLE)
+// =============================
 
-// --------------------------------------------------
-// Base de conhecimento da clínica (Chat IA)
-// --------------------------------------------------
-
-const CLINIC_KNOWLEDGE = `
-Você é o assistente virtual da clínica MedIntelli.
-
-Regras importantes:
-- Seja educado, objetivo e profissional.
-- Ajude com: agendamentos, horários, retornos, orientações gerais de rotina.
-- NÃO faça diagnóstico médico nem prescrição.
-- Em caso de febre alta, dor intensa, falta de ar, perda de consciência, ou sintomas agudos, oriente procurar pronto atendimento imediatamente.
-- Para dúvidas específicas sobre tratamento, exames ou laudos, oriente falar com o médico responsável.
-
-A clínica trabalha com:
-- Consultas eletivas
-- Retornos
-- Exames complementares
-- Acompanhamentos de rotina
-`;
-
-// --------------------------------------------------
-// Componentes de layout
-// --------------------------------------------------
+function AppShell(props: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen bg-slate-100 flex flex-col text-slate-900">
+      <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold text-sm">
+            M
+          </div>
+          <div className="flex flex-col">
+            <span className="font-semibold text-sm">MedIntelli Clínica</span>
+            <span className="text-xs text-slate-500">
+              Painel de Gestão e Central de Mensagens
+            </span>
+          </div>
+        </div>
+        <div className="text-xs text-slate-500">
+          V3.0 • Ambiente Clínica • {new Date().toLocaleDateString("pt-BR")}
+        </div>
+      </header>
+      <div className="flex flex-1 overflow-hidden">{props.children}</div>
+    </div>
+  );
+}
 
 function Sidebar(props: {
   active: Section;
@@ -142,41 +126,33 @@ function Sidebar(props: {
 }) {
   const items: { id: Section; label: string }[] = [
     { id: "dashboard", label: "Dashboard" },
-    { id: "patients", label: "Pacientes" },
+    { id: "pacientes", label: "Pacientes" },
     { id: "agenda", label: "Agenda" },
     { id: "waitlist", label: "Fila de Espera" },
-    { id: "messages", label: "Central Clínica" },
-    { id: "doctor", label: "Painel Médico" },
-    { id: "chat", label: "Chat IA" },
+    { id: "central", label: "Central Clínica" },
     { id: "config", label: "Configurações" },
   ];
 
   return (
-    <aside className="w-64 bg-slate-900 text-slate-50 flex flex-col">
-      <div className="px-5 py-4 border-b border-slate-800">
-        <div className="font-bold text-lg">MedIntelli Clínica</div>
-        <p className="text-xs text-slate-300 mt-1">
-          Painel administrativo V3
-        </p>
+    <aside className="w-60 bg-slate-950 text-slate-100 flex flex-col">
+      <div className="px-4 py-3 border-b border-slate-800 text-xs text-slate-400">
+        Menu Principal
       </div>
-      <nav className="flex-1 overflow-y-auto py-3">
+      <nav className="flex-1 py-2">
         {items.map((item) => (
           <button
             key={item.id}
-            type="button"
             onClick={() => props.onChange(item.id)}
-            className={`w-full text-left px-4 py-2 text-sm transition ${
-              props.active === item.id
-                ? "bg-slate-700 text-white"
-                : "text-slate-200 hover:bg-slate-800"
+            className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-800 transition ${
+              props.active === item.id ? "bg-slate-800 font-semibold" : ""
             }`}
           >
             {item.label}
           </button>
         ))}
       </nav>
-      <div className="px-4 py-3 border-t border-slate-800 text-[11px] text-slate-400">
-        MedIntelli Basic • V3.0
+      <div className="px-4 py-3 border-t border-slate-800 text-[11px] text-slate-500">
+        Usuário: <span className="font-semibold">Clínica MedIntelli</span>
       </div>
     </aside>
   );
@@ -188,100 +164,102 @@ function PageShell(props: {
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex-1 min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200 px-8 py-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-800">
-            {props.title}
-          </h1>
-          {props.subtitle && (
-            <p className="text-xs text-slate-500 mt-1">{props.subtitle}</p>
-          )}
-        </div>
-      </header>
-      <main className="px-8 py-6">{props.children}</main>
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="border-b border-slate-200 bg-white px-6 py-3">
+        <h1 className="text-lg font-semibold">{props.title}</h1>
+        {props.subtitle && (
+          <p className="text-xs text-slate-500 mt-1">{props.subtitle}</p>
+        )}
+      </div>
+      <div className="flex-1 overflow-auto p-4">{props.children}</div>
     </div>
   );
 }
 
-// --------------------------------------------------
-// DASHBOARD
-// --------------------------------------------------
+// =============================
+//  DASHBOARD
+// =============================
 
 function DashboardSection() {
   return (
     <PageShell
-      title="Visão geral"
-      subtitle="Resumo rápido do funcionamento da clínica."
+      title="Dashboard Geral"
+      subtitle="Visão geral da operação da clínica"
     >
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <p className="text-xs text-slate-500">Pacientes</p>
-          <p className="text-2xl font-semibold mt-1">Cadastro simples</p>
-          <p className="text-xs text-slate-500 mt-1">
-            Cadastro e listagem com dados básicos.
-          </p>
+      <div className="grid grid-cols-4 gap-4 mb-4">
+        <div className="bg-white rounded-lg border border-slate-200 p-3">
+          <div className="text-xs text-slate-500">Pacientes</div>
+          <div className="text-2xl font-semibold mt-1">—</div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            Total cadastrado (carregado na aba Pacientes)
+          </div>
         </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <p className="text-xs text-slate-500">Agenda</p>
-          <p className="text-2xl font-semibold mt-1">FullCalendar</p>
-          <p className="text-xs text-slate-500 mt-1">
-            Agenda visual com status por cor.
-          </p>
+        <div className="bg-white rounded-lg border border-slate-200 p-3">
+          <div className="text-xs text-slate-500">Consultas Hoje</div>
+          <div className="text-2xl font-semibold mt-1">—</div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            Visualize na aba Agenda.
+          </div>
         </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <p className="text-xs text-slate-500">Central</p>
-          <p className="text-2xl font-semibold mt-1">Mensagens</p>
-          <p className="text-xs text-slate-500 mt-1">
-            Histórico básico de mensagens via WhatsApp / App.
-          </p>
+        <div className="bg-white rounded-lg border border-slate-200 p-3">
+          <div className="text-xs text-slate-500">Fila de Espera</div>
+          <div className="text-2xl font-semibold mt-1">—</div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            Gerencie em Fila de Espera.
+          </div>
+        </div>
+        <div className="bg-white rounded-lg border border-slate-200 p-3">
+          <div className="text-xs text-slate-500">Mensagens Recentes</div>
+          <div className="text-2xl font-semibold mt-1">—</div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            Atenda pela Central Clínica.
+          </div>
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 text-sm text-slate-700">
-        <p className="mb-2 font-medium">Como usar a versão V3:</p>
-        <ol className="list-decimal list-inside space-y-1">
-          <li>
-            Cadastre pacientes em <strong>Pacientes</strong>.
-          </li>
-          <li>
-            Agende consultas em <strong>Agenda</strong> (FullCalendar).
-          </li>
-          <li>
-            Controle encaixes pela <strong>Fila de Espera</strong>.
-          </li>
-          <li>
-            Acompanhe conversas em <strong>Central Clínica</strong>.
-          </li>
-          <li>
-            Use o <strong>Chat IA</strong> para dúvidas rápidas.
-          </li>
-          <li>
-            Registre evolução no <strong>Painel Médico</strong>.
-          </li>
-        </ol>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-white rounded-lg border border-slate-200 p-4 text-sm">
+          <h2 className="font-semibold mb-2">Fluxo operacional sugerido</h2>
+          <ol className="list-decimal list-inside text-xs space-y-1 text-slate-600">
+            <li>Cadastrar pacientes na aba Pacientes.</li>
+            <li>Agendar consultas na aba Agenda (FullCalendar).</li>
+            <li>Usar Fila de Espera para encaixes e sobras.</li>
+            <li>
+              Atender WhatsApp / App Paciente pela aba Central Clínica, com IA.
+            </li>
+          </ol>
+        </div>
+        <div className="bg-white rounded-lg border border-slate-200 p-4 text-sm">
+          <h2 className="font-semibold mb-2">Observações</h2>
+          <p className="text-xs text-slate-600">
+            Este painel é um resumo. O foco do uso diário será:
+          </p>
+          <ul className="list-disc list-inside text-xs text-slate-600 mt-1">
+            <li>Agenda (consulta de horários)</li>
+            <li>Central Clínica (mensagens e WhatsApp)</li>
+            <li>Fila de Espera (encaixes)</li>
+          </ul>
+        </div>
       </div>
     </PageShell>
   );
 }
 
-// --------------------------------------------------
-// PACIENTES (CRUD simples)
-// --------------------------------------------------
+// =============================
+//  PACIENTES
+// =============================
 
-function PatientsSection() {
-  const [patients, setPatients] = useState<Patient[]>([]);
+function PacientesSection() {
+  const [list, setList] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>("");
-
   const [form, setForm] = useState({
     name: "",
-    cpf: "",
     phone: "",
     birth_date: "",
+    document: "",
+    email: "",
     notes: "",
   });
 
@@ -299,9 +277,8 @@ function PatientsSection() {
       console.error(error);
       setError("Erro ao carregar pacientes.");
     } else {
-      setPatients((data || []) as Patient[]);
+      setList((data || []) as Patient[]);
     }
-
     setLoading(false);
   }
 
@@ -310,13 +287,15 @@ function PatientsSection() {
   }, []);
 
   function handleChange(
-    e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLTextAreaElement
+    >
   ) {
     const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+    setForm((f) => ({ ...f, [name]: value }));
   }
 
-  async function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!supabase) return;
     if (!form.name.trim()) return;
@@ -324,13 +303,12 @@ function PatientsSection() {
     setSaving(true);
     setError("");
 
-    const cleanCpf = form.cpf ? form.cpf.replace(/\D/g, "") : null;
-
     const { error } = await supabase.from("patients").insert({
       name: form.name,
-      cpf: cleanCpf,
       phone: form.phone || null,
       birth_date: form.birth_date || null,
+      document: form.document || null,
+      email: form.email || null,
       notes: form.notes || null,
     });
 
@@ -340,9 +318,10 @@ function PatientsSection() {
     } else {
       setForm({
         name: "",
-        cpf: "",
         phone: "",
         birth_date: "",
+        document: "",
+        email: "",
         notes: "",
       });
       await loadPatients();
@@ -359,116 +338,146 @@ function PatientsSection() {
       console.error(error);
       alert("Erro ao excluir paciente.");
     } else {
-      setPatients((prev) => prev.filter((p) => p.id !== id));
+      setList((prev) => prev.filter((p) => p.id !== id));
     }
   }
 
   return (
     <PageShell
-      title="Pacientes"
-      subtitle="Cadastro básico de pacientes com dados essenciais."
+      title="Cadastro de Pacientes"
+      subtitle="Cadastro e consulta de pacientes da clínica"
     >
-      <div className="grid md:grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <h2 className="text-sm font-semibold text-slate-800 mb-3">
-            Novo paciente
+      <div className="grid grid-cols-[360px,1fr] gap-4">
+        {/* Formulário */}
+        <div className="bg-white rounded-lg border border-slate-200 p-4 text-sm">
+          <h2 className="font-semibold mb-3 text-sm">
+            Novo paciente / Edição simples
           </h2>
           <form className="space-y-2" onSubmit={handleSubmit}>
-            <input
-              name="name"
-              value={form.name}
-              onChange={handleChange}
-              placeholder="Nome *"
-              required
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-            />
-            <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-slate-600">Nome *</label>
               <input
-                name="cpf"
-                value={form.cpf}
+                name="name"
+                value={form.name}
                 onChange={handleChange}
-                placeholder="CPF"
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-              />
-              <input
-                name="phone"
-                value={form.phone}
-                onChange={handleChange}
-                placeholder="Telefone"
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
+                required
+                className="w-full border rounded-md px-2 py-1 text-sm"
               />
             </div>
-            <input
-              type="date"
-              name="birth_date"
-              value={form.birth_date}
-              onChange={handleChange}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-            />
-            <textarea
-              name="notes"
-              value={form.notes}
-              onChange={handleChange}
-              placeholder="Observações"
-              rows={3}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-            />
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs text-slate-600">Telefone</label>
+                <input
+                  name="phone"
+                  value={form.phone}
+                  onChange={handleChange}
+                  className="w-full border rounded-md px-2 py-1 text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-600">Nascimento</label>
+                <input
+                  type="date"
+                  name="birth_date"
+                  value={form.birth_date}
+                  onChange={handleChange}
+                  className="w-full border rounded-md px-2 py-1 text-sm"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs text-slate-600">Documento</label>
+                <input
+                  name="document"
+                  value={form.document}
+                  onChange={handleChange}
+                  className="w-full border rounded-md px-2 py-1 text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-600">E-mail</label>
+                <input
+                  name="email"
+                  value={form.email}
+                  onChange={handleChange}
+                  className="w-full border rounded-md px-2 py-1 text-sm"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-slate-600">Observações</label>
+              <textarea
+                name="notes"
+                value={form.notes}
+                onChange={handleChange}
+                rows={3}
+                className="w-full border rounded-md px-2 py-1 text-sm"
+              />
+            </div>
+            {error && (
+              <div className="text-xs text-red-600">{error}</div>
+            )}
             <button
               type="submit"
-              disabled={saving}
-              className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-60"
+              disabled={saving || !supabase}
+              className="px-3 py-2 bg-blue-600 text-white rounded-md text-xs hover:bg-blue-700 disabled:opacity-50"
             >
               {saving ? "Salvando..." : "Salvar paciente"}
             </button>
-            {error && (
-              <p className="text-xs text-red-600 mt-1">{error}</p>
-            )}
           </form>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <h2 className="text-sm font-semibold text-slate-800 mb-3">
-            Lista de pacientes
-          </h2>
+        {/* Lista */}
+        <div className="bg-white rounded-lg border border-slate-200 p-4 text-xs">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="font-semibold text-sm">Lista de pacientes</h2>
+            <button
+              onClick={loadPatients}
+              className="px-2 py-1 text-[11px] border rounded-md"
+            >
+              Atualizar
+            </button>
+          </div>
           {loading ? (
-            <p className="text-xs text-slate-500">Carregando...</p>
-          ) : patients.length === 0 ? (
-            <p className="text-xs text-slate-500">
+            <p className="text-slate-500 text-xs">Carregando...</p>
+          ) : list.length === 0 ? (
+            <p className="text-slate-500 text-xs">
               Nenhum paciente cadastrado.
             </p>
           ) : (
-            <div className="max-h-[420px] overflow-y-auto">
-              <table className="min-w-full text-xs">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-2 py-1 text-left font-semibold text-slate-600">
+            <div className="overflow-auto max-h-[70vh]">
+              <table className="w-full border-collapse text-[11px]">
+                <thead>
+                  <tr className="bg-slate-100">
+                    <th className="border border-slate-200 px-2 py-1 text-left">
                       Nome
                     </th>
-                    <th className="px-2 py-1 text-left font-semibold text-slate-600">
+                    <th className="border border-slate-200 px-2 py-1 text-left">
                       Telefone
                     </th>
-                    <th className="px-2 py-1 text-left font-semibold text-slate-600">
-                      CPF
+                    <th className="border border-slate-200 px-2 py-1">
+                      Nasc.
                     </th>
-                    <th className="px-2 py-1"></th>
+                    <th className="border border-slate-200 px-2 py-1">
+                      Ações
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {patients.map((p) => (
-                    <tr
-                      key={p.id}
-                      className="border-t border-slate-100"
-                    >
-                      <td className="px-2 py-1">{p.name}</td>
-                      <td className="px-2 py-1">
-                        {p.phone || <span className="text-slate-400">-</span>}
+                  {list.map((p) => (
+                    <tr key={p.id}>
+                      <td className="border border-slate-200 px-2 py-1">
+                        {p.name}
                       </td>
-                      <td className="px-2 py-1">
-                        {p.cpf || <span className="text-slate-400">-</span>}
+                      <td className="border border-slate-200 px-2 py-1">
+                        {p.phone || "-"}
                       </td>
-                      <td className="px-2 py-1 text-right">
+                      <td className="border border-slate-200 px-2 py-1 text-center">
+                        {p.birth_date || "-"}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-1 text-center">
                         <button
-                          type="button"
                           onClick={() => handleDelete(p.id)}
                           className="text-red-600 hover:underline"
                         >
@@ -487,21 +496,20 @@ function PatientsSection() {
   );
 }
 
-// --------------------------------------------------
-// AGENDA (FullCalendar + appointments_full)
-// --------------------------------------------------
+// =============================
+//  AGENDA (FULLCALENDAR)
+// =============================
 
 function AgendaSection() {
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
-  const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({
     patient_id: "",
-    title: "",
     date: "",
     time: "",
-    duration: "30", // minutos
-    description: "",
+    duration: 30,
+    reason: "",
   });
 
   async function loadData() {
@@ -511,10 +519,8 @@ function AgendaSection() {
     const [pats, apps] = await Promise.all([
       supabase.from("patients").select("id,name").order("name"),
       supabase
-        .from("appointments_full")
-        .select(
-          "id,title,description,start_time,end_time,status,patient_id,patients(id,name)"
-        )
+        .from("appointments")
+        .select("id,patient_id,start_time,end_time,status,reason,patients(name)")
         .order("start_time", { ascending: true }),
     ]);
 
@@ -523,18 +529,7 @@ function AgendaSection() {
     }
 
     if (!apps.error && apps.data) {
-      const mapped = (apps.data as AppointmentFull[]).map((a: any) => ({
-        id: a.id,
-        title: a.title || a.patients?.name || "Consulta",
-        start: a.start_time,
-        end: a.end_time || undefined,
-        extendedProps: {
-          status: a.status,
-          patientName: a.patients?.name,
-          description: a.description,
-        },
-      }));
-      setEvents(mapped);
+      setAppointments(apps.data as Appointment[]);
     }
 
     setLoading(false);
@@ -545,211 +540,219 @@ function AgendaSection() {
   }, []);
 
   function handleChange(
-    e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
   ) {
     const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+    setForm((f) => ({ ...f, [name]: value }));
   }
 
-  async function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!supabase) return;
     if (!form.patient_id || !form.date || !form.time) return;
 
     const start = new Date(`${form.date}T${form.time}:00`);
-    const durationMinutes = Number(form.duration) || 30;
-    const end = new Date(start.getTime() + durationMinutes * 60000);
+    const end = new Date(start.getTime() + form.duration * 60000);
 
-    const { error } = await supabase.from("appointments_full").insert({
+    const { error } = await supabase.from("appointments").insert({
       patient_id: form.patient_id,
-      title:
-        form.title ||
-        patients.find((p) => p.id === form.patient_id)?.name ||
-        "Consulta",
-      description: form.description || null,
       start_time: start.toISOString(),
       end_time: end.toISOString(),
+      reason: form.reason || null,
       status: "agendado",
     });
 
     if (error) {
       console.error(error);
-      alert("Erro ao agendar consulta.");
-      return;
+      alert("Erro ao agendar.");
+    } else {
+      setForm({
+        patient_id: "",
+        date: "",
+        time: "",
+        duration: 30,
+        reason: "",
+      });
+      await loadData();
     }
-
-    setForm({
-      patient_id: "",
-      title: "",
-      date: "",
-      time: "",
-      duration: "30",
-      description: "",
-    });
-
-    await loadData();
   }
 
-  function eventClass(status?: string) {
-    switch (status) {
-      case "confirmado":
-        return "bg-emerald-500 border-emerald-500";
-      case "cancelado":
-        return "bg-red-500 border-red-500";
-      case "concluido":
-        return "bg-slate-500 border-slate-500";
-      default:
-        return "bg-blue-500 border-blue-500";
-    }
+  function mapEvents() {
+    return appointments.map((a) => {
+      const patientName = a.patients?.name || "Paciente";
+      const title = `${patientName} (${a.status})`;
+      return {
+        id: a.id,
+        title,
+        start: a.start_time,
+        end: a.end_time || undefined,
+      };
+    });
+  }
+
+  function handleDateClick(arg: DateClickArg) {
+    const d = arg.date;
+    const dateStr = d.toISOString().substring(0, 10);
+    const hours = String(d.getHours()).padStart(2, "0");
+    const minutes = String(d.getMinutes()).padStart(2, "0");
+    setForm((f) => ({
+      ...f,
+      date: dateStr,
+      time: `${hours}:${minutes}`,
+    }));
   }
 
   return (
     <PageShell
-      title="Agenda"
-      subtitle="Agenda visual com FullCalendar."
+      title="Agenda da Clínica"
+      subtitle="Visualização de consultas em formato calendário"
     >
-      <div className="grid lg:grid-cols-[340px,1fr] gap-6">
-        {/* Formulário lateral */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <h2 className="text-sm font-semibold text-slate-800 mb-3">
-            Novo agendamento
+      <div className="grid grid-cols-[320px,1fr] gap-4">
+        {/* Formulário de agendamento */}
+        <div className="bg-white rounded-lg border border-slate-200 p-4 text-sm">
+          <h2 className="font-semibold mb-3 text-sm">
+            Novo agendamento rápido
           </h2>
-
           <form className="space-y-2" onSubmit={handleSubmit}>
-            <select
-              name="patient_id"
-              value={form.patient_id}
-              onChange={handleChange}
-              required
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-            >
-              <option value="">Selecione o paciente</option>
-              {patients.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-
-            <input
-              name="title"
-              value={form.title}
-              onChange={handleChange}
-              placeholder="Título (opcional)"
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-            />
-
-            <div className="grid grid-cols-[1.2fr,1fr] gap-2">
-              <input
-                type="date"
-                name="date"
-                value={form.date}
+            <div>
+              <label className="text-xs text-slate-600">
+                Paciente *
+              </label>
+              <select
+                name="patient_id"
+                value={form.patient_id}
                 onChange={handleChange}
                 required
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-              />
+                className="w-full border rounded-md px-2 py-1 text-sm"
+              >
+                <option value="">Selecione...</option>
+                {patients.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs text-slate-600">Data *</label>
+                <input
+                  type="date"
+                  name="date"
+                  value={form.date}
+                  onChange={handleChange}
+                  className="w-full border rounded-md px-2 py-1 text-sm"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-600">Hora *</label>
+                <input
+                  type="time"
+                  name="time"
+                  value={form.time}
+                  onChange={handleChange}
+                  className="w-full border rounded-md px-2 py-1 text-sm"
+                  required
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-slate-600">
+                Duração (minutos)
+              </label>
               <input
-                type="time"
-                name="time"
-                value={form.time}
-                onChange={handleChange}
-                required
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
+                type="number"
+                name="duration"
+                value={form.duration}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    duration: Number(e.target.value || 30),
+                  }))
+                }
+                className="w-full border rounded-md px-2 py-1 text-sm"
+                min={10}
+                max={180}
               />
             </div>
-
-            <select
-              name="duration"
-              value={form.duration}
-              onChange={handleChange}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-            >
-              <option value="20">20 min</option>
-              <option value="30">30 min</option>
-              <option value="40">40 min</option>
-              <option value="60">60 min</option>
-            </select>
-
-            <textarea
-              name="description"
-              value={form.description}
-              onChange={handleChange}
-              placeholder="Motivo / observações"
-              rows={3}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-            />
-
+            <div>
+              <label className="text-xs text-slate-600">
+                Motivo / Observações
+              </label>
+              <input
+                name="reason"
+                value={form.reason}
+                onChange={handleChange}
+                className="w-full border rounded-md px-2 py-1 text-sm"
+              />
+            </div>
             <button
               type="submit"
-              className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+              disabled={!supabase}
+              className="px-3 py-2 bg-blue-600 text-white rounded-md text-xs hover:bg-blue-700 disabled:opacity-50"
             >
               Agendar
             </button>
           </form>
-
-          {loading && (
-            <p className="text-xs text-slate-500 mt-2">Carregando agenda...</p>
-          )}
         </div>
 
         {/* Calendário */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <FullCalendar
-            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-            initialView="timeGridWeek"
-            locale="pt-br"
-            slotMinTime="07:00:00"
-            slotMaxTime="20:00:00"
-            height="78vh"
-            events={events}
-            eventClassNames={(arg) =>
-              `text-xs text-white border ${eventClass(
-                (arg.event.extendedProps as any)?.status
-              )}`
-            }
-            headerToolbar={{
-              left: "prev,next today",
-              center: "title",
-              right: "dayGridMonth,timeGridWeek,timeGridDay",
-            }}
-          />
+        <div className="bg-white rounded-lg border border-slate-200 p-3 text-xs">
+          {loading ? (
+            <p className="text-slate-500 text-xs">
+              Carregando agenda...
+            </p>
+          ) : (
+            <FullCalendar
+              plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+              initialView="timeGridWeek"
+              locale="pt-br"
+              height="75vh"
+              headerToolbar={{
+                left: "prev,next today",
+                center: "title",
+                right: "dayGridMonth,timeGridWeek,timeGridDay",
+              }}
+              events={mapEvents()}
+              dateClick={handleDateClick}
+            />
+          )}
         </div>
       </div>
     </PageShell>
   );
 }
 
-// --------------------------------------------------
-// FILA DE ESPERA (waitlist_full)
-// --------------------------------------------------
+// =============================
+//  FILA DE ESPERA
+// =============================
 
 function WaitlistSection() {
-  const [items, setItems] = useState<WaitlistFull[]>([]);
+  const [items, setItems] = useState<WaitlistItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({
     patient_name: "",
     phone: "",
-    priority: "1",
     reason: "",
+    priority: "1",
   });
 
   async function loadList() {
     if (!supabase) return;
     setLoading(true);
-
     const { data, error } = await supabase
-      .from("waitlist_full")
+      .from("waitlist")
       .select("*")
       .order("priority", { ascending: false })
       .order("created_at", { ascending: true });
 
     if (error) {
       console.error(error);
-      alert("Erro ao carregar fila de espera.");
+      alert("Erro ao carregar fila.");
     } else {
-      setItems((data || []) as WaitlistFull[]);
+      setItems((data || []) as WaitlistItem[]);
     }
-
     setLoading(false);
   }
 
@@ -758,116 +761,113 @@ function WaitlistSection() {
   }, []);
 
   function handleChange(
-    e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+    >
   ) {
     const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+    setForm((f) => ({ ...f, [name]: value }));
   }
 
-  async function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!supabase) return;
     if (!form.patient_name.trim()) return;
 
-    const { error } = await supabase.from("waitlist_full").insert({
+    const { error } = await supabase.from("waitlist").insert({
       patient_name: form.patient_name,
       phone: form.phone || null,
-      priority: Number(form.priority) || 1,
       reason: form.reason || null,
-      status: "aguardando",
+      priority: Number(form.priority) || 1,
     });
 
     if (error) {
       console.error(error);
       alert("Erro ao adicionar à fila.");
-      return;
+    } else {
+      setForm({
+        patient_name: "",
+        phone: "",
+        reason: "",
+        priority: "1",
+      });
+      await loadList();
     }
-
-    setForm({
-      patient_name: "",
-      phone: "",
-      priority: "1",
-      reason: "",
-    });
-
-    await loadList();
   }
 
-  async function handleAtender(id: string) {
+  async function handleRemove(id: string) {
     if (!supabase) return;
-    const { error } = await supabase
-      .from("waitlist_full")
-      .update({ status: "atendido" })
-      .eq("id", id);
+    if (!window.confirm("Atender / remover da fila?")) return;
+    const { error } = await supabase.from("waitlist").delete().eq("id", id);
     if (error) {
       console.error(error);
-      alert("Erro ao atualizar.");
-      return;
+      alert("Erro ao remover.");
+    } else {
+      setItems((prev) => prev.filter((i) => i.id !== id));
     }
-    await loadList();
-  }
-
-  async function handleRemover(id: string) {
-    if (!supabase) return;
-    const { error } = await supabase
-      .from("waitlist_full")
-      .delete()
-      .eq("id", id);
-    if (error) {
-      console.error(error);
-      alert("Erro ao remover da fila.");
-      return;
-    }
-    setItems((prev) => prev.filter((i) => i.id !== id));
   }
 
   return (
     <PageShell
-      title="Fila de espera"
-      subtitle="Controle de encaixes e prioridades."
+      title="Fila de Espera"
+      subtitle="Gestão de encaixes e sobras de agenda"
     >
-      <div className="grid lg:grid-cols-[340px,1fr] gap-6">
-        {/* Formulário */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <h2 className="text-sm font-semibold text-slate-800 mb-3">
-            Adicionar à fila
+      <div className="grid grid-cols-[320px,1fr] gap-4">
+        {/* Form */}
+        <div className="bg-white rounded-lg border border-slate-200 p-4 text-sm">
+          <h2 className="font-semibold mb-3 text-sm">
+            Adicionar à fila de espera
           </h2>
           <form className="space-y-2" onSubmit={handleSubmit}>
-            <input
-              name="patient_name"
-              value={form.patient_name}
-              onChange={handleChange}
-              placeholder="Nome do paciente *"
-              required
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-            />
-            <input
-              name="phone"
-              value={form.phone}
-              onChange={handleChange}
-              placeholder="Telefone"
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-            />
-            <select
-              name="priority"
-              value={form.priority}
-              onChange={handleChange}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-            >
-              <option value="1">Normal</option>
-              <option value="2">Prioridade</option>
-            </select>
-            <textarea
-              name="reason"
-              value={form.reason}
-              onChange={handleChange}
-              placeholder="Motivo / Observações"
-              rows={3}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-            />
+            <div>
+              <label className="text-xs text-slate-600">
+                Nome do paciente *
+              </label>
+              <input
+                name="patient_name"
+                value={form.patient_name}
+                onChange={handleChange}
+                className="w-full border rounded-md px-2 py-1 text-sm"
+                required
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-600">Telefone</label>
+              <input
+                name="phone"
+                value={form.phone}
+                onChange={handleChange}
+                className="w-full border rounded-md px-2 py-1 text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-600">
+                Motivo / Observações
+              </label>
+              <textarea
+                name="reason"
+                value={form.reason}
+                onChange={handleChange}
+                rows={2}
+                className="w-full border rounded-md px-2 py-1 text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-600">Prioridade</label>
+              <select
+                name="priority"
+                value={form.priority}
+                onChange={handleChange}
+                className="w-full border rounded-md px-2 py-1 text-sm"
+              >
+                <option value="1">Normal</option>
+                <option value="2">Preferencial</option>
+              </select>
+            </div>
             <button
               type="submit"
-              className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+              disabled={!supabase}
+              className="px-3 py-2 bg-blue-600 text-white rounded-md text-xs hover:bg-blue-700 disabled:opacity-50"
             >
               Adicionar à fila
             </button>
@@ -875,60 +875,75 @@ function WaitlistSection() {
         </div>
 
         {/* Lista */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <h2 className="text-sm font-semibold text-slate-800 mb-3">
-            Fila atual
-          </h2>
+        <div className="bg-white rounded-lg border border-slate-200 p-4 text-xs">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="font-semibold text-sm">Fila atual</h2>
+            <button
+              onClick={loadList}
+              className="px-2 py-1 text-[11px] border rounded-md"
+            >
+              Atualizar
+            </button>
+          </div>
           {loading ? (
-            <p className="text-xs text-slate-500">Carregando...</p>
+            <p className="text-slate-500 text-xs">Carregando...</p>
           ) : items.length === 0 ? (
-            <p className="text-xs text-slate-500">Fila vazia.</p>
+            <p className="text-slate-500 text-xs">
+              Nenhum paciente na fila.
+            </p>
           ) : (
-            <div className="max-h-[460px] overflow-y-auto text-xs">
-              <table className="min-w-full">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-2 py-1 text-left">Paciente</th>
-                    <th className="px-2 py-1 text-left">Fone</th>
-                    <th className="px-2 py-1 text-left">Prioridade</th>
-                    <th className="px-2 py-1 text-left">Status</th>
-                    <th className="px-2 py-1 text-left">Entrada</th>
-                    <th className="px-2 py-1 text-right">Ações</th>
+            <div className="overflow-auto max-h-[70vh]">
+              <table className="w-full border-collapse text-[11px]">
+                <thead>
+                  <tr className="bg-slate-100">
+                    <th className="border border-slate-200 px-2 py-1 text-left">
+                      Paciente
+                    </th>
+                    <th className="border border-slate-200 px-2 py-1">
+                      Telefone
+                    </th>
+                    <th className="border border-slate-200 px-2 py-1">
+                      Motivo
+                    </th>
+                    <th className="border border-slate-200 px-2 py-1">
+                      Prioridade
+                    </th>
+                    <th className="border border-slate-200 px-2 py-1">
+                      Entrada
+                    </th>
+                    <th className="border border-slate-200 px-2 py-1">
+                      Ações
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((i) => (
-                    <tr
-                      key={i.id}
-                      className="border-t border-slate-100"
-                    >
-                      <td className="px-2 py-1">{i.patient_name}</td>
-                      <td className="px-2 py-1">
-                        {i.phone || <span className="text-slate-400">-</span>}
+                    <tr key={i.id}>
+                      <td className="border border-slate-200 px-2 py-1">
+                        {i.patient_name}
                       </td>
-                      <td className="px-2 py-1">
-                        {i.priority === 2 ? "Prioridade" : "Normal"}
+                      <td className="border border-slate-200 px-2 py-1 text-center">
+                        {i.phone || "-"}
                       </td>
-                      <td className="px-2 py-1 capitalize">
-                        {i.status || "aguardando"}
+                      <td className="border border-slate-200 px-2 py-1">
+                        {i.reason || "-"}
                       </td>
-                      <td className="px-2 py-1">
-                        {new Date(i.created_at).toLocaleString("pt-BR")}
+                      <td className="border border-slate-200 px-2 py-1 text-center">
+                        {i.priority === 2
+                          ? "Preferencial"
+                          : "Normal"}
                       </td>
-                      <td className="px-2 py-1 text-right space-x-1">
+                      <td className="border border-slate-200 px-2 py-1 text-center">
+                        {new Date(
+                          i.created_at
+                        ).toLocaleString("pt-BR")}
+                      </td>
+                      <td className="border border-slate-200 px-2 py-1 text-center">
                         <button
-                          type="button"
-                          onClick={() => handleAtender(i.id)}
-                          className="text-emerald-600 hover:underline"
+                          onClick={() => handleRemove(i.id)}
+                          className="text-blue-600 hover:underline"
                         >
-                          Atender
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleRemover(i.id)}
-                          className="text-slate-500 hover:underline"
-                        >
-                          Remover
+                          Atender / Remover
                         </button>
                       </td>
                     </tr>
@@ -943,497 +958,157 @@ function WaitlistSection() {
   );
 }
 
-// --------------------------------------------------
-// CENTRAL CLÍNICA (messages_center)
-// --------------------------------------------------
+// =============================
+//  CENTRAL CLÍNICA (WHATSAPP + IA)
+// =============================
 
-function MessagesSection() {
+function CentralClinicaSection() {
   const [messages, setMessages] = useState<MessageCenter[]>([]);
+  const [categories, setCategories] = useState<MessageCategory[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterChannel, setFilterChannel] = useState<string>("todos");
 
-  async function loadMessages() {
+  const [filter, setFilter] = useState({
+    channel: "todos",
+    category: "todos",
+    search: "",
+  });
+
+  const [selectedPhone, setSelectedPhone] = useState<string | null>(
+    null
+  );
+  const [chatMessages, setChatMessages] = useState<MessageCenter[]>([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState("");
+  const [classifying, setClassifying] = useState(false);
+
+  async function loadBase() {
     if (!supabase) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from("messages_center")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(100);
 
-    if (error) {
-      console.error(error);
-      alert("Erro ao carregar mensagens da central.");
-    } else {
-      setMessages((data || []) as MessageCenter[]);
+    const [msgs, cats] = await Promise.all([
+      supabase
+        .from("messages_center")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(500),
+      supabase
+        .from("message_categories")
+        .select("*")
+        .order("id", { ascending: true }),
+    ]);
+
+    if (!msgs.error && msgs.data) {
+      setMessages(msgs.data as MessageCenter[]);
     }
+    if (!cats.error && cats.data) {
+      setCategories(cats.data as MessageCategory[]);
+    }
+
     setLoading(false);
   }
 
-  useEffect(() => {
-    loadMessages();
-  }, []);
-
-  const filtered = messages.filter((m) =>
-    filterChannel === "todos"
-      ? true
-      : m.channel.toLowerCase() === filterChannel
-  );
-
-  return (
-    <PageShell
-      title="Central Clínica"
-      subtitle="Histórico básico de mensagens (WhatsApp / App / Outros)."
-    >
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 text-xs">
-        <div className="flex items-center justify-between mb-3">
-          <div className="space-x-2">
-            <button
-              type="button"
-              onClick={() => setFilterChannel("todos")}
-              className={`px-3 py-1 rounded-full border ${
-                filterChannel === "todos"
-                  ? "bg-slate-900 text-white border-slate-900"
-                  : "border-slate-300 text-slate-600"
-              }`}
-            >
-              Todos
-            </button>
-            <button
-              type="button"
-              onClick={() => setFilterChannel("whatsapp")}
-              className={`px-3 py-1 rounded-full border ${
-                filterChannel === "whatsapp"
-                  ? "bg-emerald-600 text-white border-emerald-600"
-                  : "border-slate-300 text-slate-600"
-              }`}
-            >
-              WhatsApp
-            </button>
-            <button
-              type="button"
-              onClick={() => setFilterChannel("app")}
-              className={`px-3 py-1 rounded-full border ${
-                filterChannel === "app"
-                  ? "bg-blue-600 text-white border-blue-600"
-                  : "border-slate-300 text-slate-600"
-              }`}
-            >
-              App Paciente
-            </button>
-          </div>
-          <button
-            type="button"
-            onClick={loadMessages}
-            className="px-3 py-1 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
-          >
-            Atualizar
-          </button>
-        </div>
-
-        {loading ? (
-          <p className="text-slate-500">Carregando...</p>
-        ) : filtered.length === 0 ? (
-          <p className="text-slate-500">
-            Nenhuma mensagem encontrada para o filtro atual.
-          </p>
-        ) : (
-          <div className="max-h-[520px] overflow-y-auto space-y-2">
-            {filtered.map((m) => (
-              <div
-                key={m.id}
-                className="border border-slate-200 rounded-lg px-3 py-2 flex gap-3 bg-slate-50"
-              >
-                <div className="w-32 text-[11px] text-slate-500">
-                  <div>
-                    {new Date(m.created_at).toLocaleDateString("pt-BR")}
-                  </div>
-                  <div>
-                    {new Date(m.created_at).toLocaleTimeString("pt-BR", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </div>
-                  <div className="mt-1">
-                    {m.channel.toLowerCase() === "whatsapp" && (
-                      <span className="inline-flex px-2 py-0.5 rounded-full bg-emerald-600/10 text-emerald-700 border border-emerald-600/30">
-                        WhatsApp
-                      </span>
-                    )}
-                    {m.channel.toLowerCase() === "app" && (
-                      <span className="inline-flex px-2 py-0.5 rounded-full bg-blue-600/10 text-blue-700 border border-blue-600/30">
-                        App
-                      </span>
-                    )}
-                    {m.channel.toLowerCase() !== "whatsapp" &&
-                      m.channel.toLowerCase() !== "app" && (
-                        <span className="inline-flex px-2 py-0.5 rounded-full bg-slate-600/10 text-slate-700 border border-slate-600/30">
-                          {m.channel}
-                        </span>
-                      )}
-                  </div>
-                </div>
-                <div className="flex-1">
-                  <div className="flex justify-between mb-1">
-                    <div className="text-[11px] text-slate-600">
-                      <strong>{m.sender_name || m.sender}</strong>
-                      {m.phone && (
-                        <span className="ml-2 text-slate-500">
-                          ({m.phone})
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[11px] text-slate-500">
-                      {m.direction === "in" ? "⬅️ Entrada" : "➡️ Saída"}
-                    </div>
-                  </div>
-                  <div className="text-[12px] text-slate-800 whitespace-pre-wrap">
-                    {m.message}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </PageShell>
-  );
-}
-
-// --------------------------------------------------
-// PAINEL MÉDICO (consultas do dia + evolução)
-// --------------------------------------------------
-
-function DoctorPanelSection() {
-  const [date, setDate] = useState<string>(() => {
-    const today = new Date();
-    return today.toISOString().slice(0, 10); // yyyy-mm-dd
-  });
-
-  const [appointments, setAppointments] = useState<AppointmentFull[]>([]);
-  const [selected, setSelected] = useState<AppointmentFull | null>(null);
-  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
-  const [notes, setNotes] = useState<MedicalNote[]>([]);
-  const [newNote, setNewNote] = useState("");
-  const [loadingList, setLoadingList] = useState(true);
-  const [loadingNotes, setLoadingNotes] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    loadAppointments();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date]);
-
-  async function loadAppointments() {
+  async function openChat(phone: string) {
     if (!supabase) return;
-    setLoadingList(true);
-
-    const startDay = new Date(date + "T00:00:00");
-    const endDay = new Date(date + "T23:59:59");
+    setSelectedPhone(phone);
 
     const { data, error } = await supabase
-      .from("appointments_full")
-      .select(
-        "id,title,description,start_time,end_time,status,patient_id,patients(id,name,phone)"
-      )
-      .gte("start_time", startDay.toISOString())
-      .lte("start_time", endDay.toISOString())
-      .order("start_time", { ascending: true });
-
-    if (error) {
-      console.error(error);
-      alert("Erro ao carregar consultas do dia.");
-      setLoadingList(false);
-      return;
-    }
-
-    setAppointments(data as any);
-    setSelected(null);
-    setSelectedPatient(null);
-    setNotes([]);
-    setLoadingList(false);
-  }
-
-  async function loadNotes(patientId: string) {
-    if (!supabase) return;
-    setLoadingNotes(true);
-
-    const { data, error } = await supabase
-      .from("medical_notes")
+      .from("messages_center")
       .select("*")
-      .eq("patient_id", patientId)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error(error);
-      alert("Erro ao carregar anotações médicas.");
-      setLoadingNotes(false);
-      return;
-    }
-
-    setNotes((data || []) as MedicalNote[]);
-    setLoadingNotes(false);
-  }
-
-  async function handleSelectAppointment(app: AppointmentFull) {
-    setSelected(app);
-
-    if (!supabase || !app.patient_id) {
-      setSelectedPatient(null);
-      setNotes([]);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("patients")
-      .select("*")
-      .eq("id", app.patient_id)
-      .maybeSingle();
+      .eq("phone", phone)
+      .order("created_at", { ascending: true });
 
     if (!error && data) {
-      setSelectedPatient(data as Patient);
-      await loadNotes(data.id);
-    } else {
-      setSelectedPatient(null);
-      setNotes([]);
+      setChatMessages(data as MessageCenter[]);
+      await generateAISuggestion(data as MessageCenter[]);
     }
   }
 
-  async function handleSaveNote(e: FormEvent) {
-    e.preventDefault();
-    if (!supabase || !selectedPatient || !newNote.trim()) return;
-    setSaving(true);
+  async function sendReply() {
+    if (!supabase || !selectedPhone || !input.trim()) return;
+    setSending(true);
 
-    const { error } = await supabase.from("medical_notes").insert({
-      patient_id: selectedPatient.id,
-      note: newNote,
+    const text = input;
+    setInput("");
+
+    // 1) Grava no Supabase
+    const { error } = await supabase.from("messages_center").insert({
+      sender: "clinica",
+      sender_name: "Atendente",
+      phone: selectedPhone,
+      message: text,
+      direction: "out",
+      channel: "whatsapp",
+      category: "resposta",
     });
 
     if (error) {
       console.error(error);
-      alert("Erro ao salvar anotação.");
-      setSaving(false);
+      alert("Erro ao salvar resposta.");
+    } else {
+      // 2) Envia via AVISA API (se chave estiver configurada)
+      const avisaKey = import.meta.env.VITE_AVISA_API_KEY as
+        | string
+        | undefined;
+      if (avisaKey) {
+        try {
+          await fetch("https://api.avisa.app/send-message", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${avisaKey}`,
+            },
+            body: JSON.stringify({
+              phone: selectedPhone,
+              message: text,
+            }),
+          });
+        } catch (e) {
+          console.error("Erro ao chamar AVISA API:", e);
+        }
+      }
+
+      await openChat(selectedPhone);
+      await loadBase();
+    }
+
+    setSending(false);
+  }
+
+  async function generateAISuggestion(chat: MessageCenter[]) {
+    const lastUserMessage = [...chat]
+      .reverse()
+      .find((m) => m.direction === "in");
+    if (!lastUserMessage) {
+      setAiSuggestion("");
       return;
     }
 
-    setNewNote("");
-    await loadNotes(selectedPatient.id);
-    setSaving(false);
-  }
-
-  function statusBadge(status: string) {
-    const base = "inline-flex px-2 py-0.5 rounded-full text-[11px] border ";
-    switch (status) {
-      case "confirmado":
-        return base + "bg-emerald-50 text-emerald-700 border-emerald-300";
-      case "cancelado":
-        return base + "bg-red-50 text-red-700 border-red-300";
-      case "concluido":
-        return base + "bg-slate-50 text-slate-700 border-slate-300";
-      default:
-        return base + "bg-blue-50 text-blue-700 border-blue-300";
+    const apiKey = import.meta.env.VITE_OPENAI_API_KEY as
+      | string
+      | undefined;
+    if (!apiKey) {
+      setAiSuggestion(
+        "Configure VITE_OPENAI_API_KEY para usar a sugestão da IA."
+      );
+      return;
     }
-  }
-
-  return (
-    <PageShell
-      title="Painel Médico"
-      subtitle="Consultas do dia e evolução por paciente."
-    >
-      <div className="grid lg:grid-cols-[340px,1fr] gap-6">
-        {/* Lista de consultas */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 text-sm">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-semibold text-slate-800">
-              Consultas do dia
-            </h2>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="px-2 py-1 rounded-lg border border-slate-300 text-xs"
-            />
-          </div>
-
-          {loadingList ? (
-            <p className="text-xs text-slate-500">Carregando...</p>
-          ) : appointments.length === 0 ? (
-            <p className="text-xs text-slate-500">
-              Nenhuma consulta para a data selecionada.
-            </p>
-          ) : (
-            <div className="space-y-2 max-h-[460px] overflow-y-auto">
-              {appointments.map((a: any) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  onClick={() => handleSelectAppointment(a)}
-                  className={`w-full text-left border rounded-lg px-3 py-2 hover:bg-slate-50 ${
-                    selected?.id === a.id
-                      ? "border-blue-500 bg-blue-50"
-                      : "border-slate-200 bg-white"
-                  }`}
-                >
-                  <div className="flex justify-between items-center">
-                    <div className="font-semibold text-xs text-slate-800">
-                      {a.title || a.patients?.name || "Consulta"}
-                    </div>
-                    <span className={statusBadge(a.status)}>
-                      {a.status}
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-slate-500 mt-1">
-                    {new Date(a.start_time).toLocaleTimeString("pt-BR", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}{" "}
-                    · {a.patients?.name || "Sem paciente vinculado"}
-                  </div>
-                  {a.description && (
-                    <div className="text-[11px] text-slate-500 mt-1">
-                      {a.description}
-                    </div>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Detalhes + evolução */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 text-sm">
-          {!selected ? (
-            <p className="text-xs text-slate-500">
-              Selecione uma consulta ao lado para ver os detalhes.
-            </p>
-          ) : (
-            <>
-              <h2 className="font-semibold text-slate-800 mb-1">
-                Detalhes da consulta
-              </h2>
-              <div className="text-xs text-slate-600 mb-3">
-                <div>
-                  <strong>Paciente:</strong>{" "}
-                  {selectedPatient?.name || "Sem paciente"}
-                </div>
-                {selectedPatient?.cpf && (
-                  <div>
-                    <strong>CPF:</strong> {selectedPatient.cpf}
-                  </div>
-                )}
-                {selectedPatient?.phone && (
-                  <div>
-                    <strong>Telefone:</strong> {selectedPatient.phone}
-                  </div>
-                )}
-                <div>
-                  <strong>Data/Hora:</strong>{" "}
-                  {new Date(selected.start_time).toLocaleString("pt-BR")}
-                </div>
-                <div>
-                  <strong>Status:</strong>{" "}
-                  <span className="capitalize">{selected.status}</span>
-                </div>
-                {selected.description && (
-                  <div className="mt-1">
-                    <strong>Motivo:</strong> {selected.description}
-                  </div>
-                )}
-              </div>
-
-              <hr className="my-3" />
-
-              <h3 className="font-semibold text-slate-800 mb-2 text-sm">
-                Anotações médicas
-              </h3>
-
-              {loadingNotes ? (
-                <p className="text-xs text-slate-500">Carregando...</p>
-              ) : notes.length === 0 ? (
-                <p className="text-xs text-slate-500 mb-2">
-                  Nenhuma anotação registrada para este paciente.
-                </p>
-              ) : (
-                <div className="max-h-40 overflow-y-auto mb-3 space-y-2 text-xs">
-                  {notes.map((n) => (
-                    <div
-                      key={n.id}
-                      className="border border-slate-200 rounded-lg px-2 py-1 bg-slate-50"
-                    >
-                      <div className="text-[10px] text-slate-500 mb-1">
-                        {new Date(n.created_at).toLocaleString("pt-BR")}
-                      </div>
-                      <div className="whitespace-pre-wrap text-slate-700">
-                        {n.note}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <form onSubmit={handleSaveNote} className="space-y-2">
-                <textarea
-                  value={newNote}
-                  onChange={(e) => setNewNote(e.target.value)}
-                  placeholder="Escreva aqui a evolução, orientações ou hipóteses clínicas (sem prescrição)."
-                  rows={4}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs"
-                />
-                <button
-                  type="submit"
-                  disabled={saving || !selectedPatient}
-                  className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-60"
-                >
-                  {saving ? "Salvando..." : "Salvar anotação"}
-                </button>
-              </form>
-            </>
-          )}
-        </div>
-      </div>
-    </PageShell>
-  );
-}
-
-// --------------------------------------------------
-// CHAT IA
-// --------------------------------------------------
-
-function ChatSection() {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      content:
-        "Olá! Sou o assistente da clínica MedIntelli. Como posso ajudar hoje?",
-    },
-  ]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  async function handleSend(e: FormEvent) {
-    e.preventDefault();
-    if (!input.trim() || loading) return;
-
-    const updated = [...messages, { role: "user" as const, content: input }];
-    setMessages(updated);
-    setInput("");
-    setLoading(true);
-    setError("");
 
     try {
-      const apiKey = import.meta.env.VITE_OPENAI_API_KEY as string | undefined;
-      if (!apiKey) {
-        setError("VITE_OPENAI_API_KEY não configurado.");
-        setLoading(false);
-        return;
-      }
-
       const payload = {
         model: "gpt-4o-mini",
         messages: [
-          { role: "system" as const, content: CLINIC_KNOWLEDGE },
-          ...updated,
+          {
+            role: "system" as const,
+            content: `
+Você é o assistente da Central Clínica MedIntelli.
+Responda de forma educada, sucinta, sem diagnosticar.
+Sugira algo que um atendente humano poderia enviar pelo WhatsApp.`,
+          },
+          {
+            role: "user" as const,
+            content: lastUserMessage.message,
+          },
         ],
       };
 
@@ -1449,146 +1124,464 @@ function ChatSection() {
         }
       );
 
-      if (!resp.ok) {
-        throw new Error("Erro API OpenAI: " + resp.status);
-      }
-
       const data = await resp.json();
       const answer =
         data.choices?.[0]?.message?.content ||
-        "Desculpe, não consegui responder agora.";
-
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: String(answer) },
-      ]);
-    } catch (err) {
-      console.error(err);
-      setError("Erro ao conversar com a IA. Verifique a chave da OpenAI.");
-    } finally {
-      setLoading(false);
+        "Não foi possível gerar sugestão.";
+      setAiSuggestion(answer);
+    } catch (e) {
+      console.error(e);
+      setAiSuggestion(
+        "Erro ao chamar IA. Verifique a chave VITE_OPENAI_API_KEY."
+      );
     }
   }
 
+  async function classifyWithAI(msg: MessageCenter) {
+    const apiKey = import.meta.env.VITE_OPENAI_API_KEY as
+      | string
+      | undefined;
+    if (!apiKey || !supabase) {
+      alert(
+        "Configure VITE_OPENAI_API_KEY para usar classificação automática."
+      );
+      return;
+    }
+
+    setClassifying(true);
+
+    try {
+      const nomesCategorias = categories.map((c) => c.name).join(", ");
+      const payload = {
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system" as const,
+            content: `
+Você é um classificador de mensagens para clínica médica.
+Escolha UMA categoria entre: ${nomesCategorias}.
+Responda APENAS com o nome exato da categoria, sem explicações.`,
+          },
+          {
+            role: "user" as const,
+            content: msg.message,
+          },
+        ],
+      };
+
+      const resp = await fetch(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+      const data = await resp.json();
+      const category =
+        (data.choices?.[0]?.message?.content as string) ||
+        "informações";
+
+      await supabase
+        .from("messages_center")
+        .update({ category })
+        .eq("id", msg.id);
+
+      await loadBase();
+      if (selectedPhone) await openChat(selectedPhone);
+    } catch (e) {
+      console.error(e);
+      alert("Erro ao classificar com IA.");
+    }
+
+    setClassifying(false);
+  }
+
+  const filtered = useMemo(() => {
+    return messages.filter((m) => {
+      const matchChannel =
+        filter.channel === "todos" ||
+        m.channel.toLowerCase() === filter.channel;
+      const matchCategory =
+        filter.category === "todos" ||
+        (m.category || "").toLowerCase() ===
+          filter.category.toLowerCase();
+      const matchSearch =
+        filter.search.trim() === "" ||
+        m.message
+          .toLowerCase()
+          .includes(filter.search.toLowerCase()) ||
+        (m.phone || "").includes(filter.search);
+
+      return matchChannel && matchCategory && matchSearch;
+    });
+  }, [messages, filter]);
+
+  // Agrupar por telefone (última mensagem)
+  const groupedByPhone = useMemo(() => {
+    const map = new Map<string, MessageCenter>();
+    for (const m of filtered) {
+      const key = m.phone || m.sender;
+      if (!map.has(key)) {
+        map.set(key, m);
+      }
+    }
+    return Array.from(map.values());
+  }, [filtered]);
+
+  useEffect(() => {
+    loadBase();
+  }, []);
+
   return (
     <PageShell
-      title="Chat IA da clínica"
-      subtitle="Assistente com base de conhecimento da MedIntelli."
+      title="Central Clínica"
+      subtitle="Atendimento unificado (WhatsApp + App Paciente) com apoio de IA"
     >
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-        <div className="border border-slate-200 rounded-lg p-3 h-80 overflow-y-auto text-sm bg-slate-50">
-          {messages.map((m, i) => (
-            <div
-              key={i}
-              className={`mb-2 flex ${
-                m.role === "user" ? "justify-end" : "justify-start"
-              }`}
-            >
-              <div
-                className={`px-3 py-2 rounded-2xl max-w-[80%] whitespace-pre-wrap ${
-                  m.role === "user"
-                    ? "bg-blue-600 text-white"
-                    : "bg-white text-slate-800 border border-slate-200"
-                }`}
-              >
-                {m.content}
-              </div>
+      <div className="grid grid-cols-[300px,1.4fr,0.9fr] gap-4 h-[78vh]">
+        {/* COLUNA 1 – FILTROS + LISTA DE CONTATOS */}
+        <div className="bg-white rounded-lg border border-slate-200 flex flex-col text-xs">
+          <div className="border-b border-slate-200 p-3">
+            <div className="font-semibold text-sm mb-2">
+              Filtros
             </div>
-          ))}
-          {loading && (
-            <p className="text-xs text-slate-500 mt-1">
-              IA está respondendo...
-            </p>
-          )}
+            <input
+              placeholder="Buscar por texto ou telefone..."
+              value={filter.search}
+              onChange={(e) =>
+                setFilter((f) => ({
+                  ...f,
+                  search: e.target.value,
+                }))
+              }
+              className="w-full border rounded-md px-2 py-1 text-xs mb-2"
+            />
+            <select
+              value={filter.channel}
+              onChange={(e) =>
+                setFilter((f) => ({
+                  ...f,
+                  channel: e.target.value,
+                }))
+              }
+              className="w-full border rounded-md px-2 py-1 text-xs mb-2"
+            >
+              <option value="todos">Todos os canais</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="app">App Paciente</option>
+              <option value="interno">Interno</option>
+            </select>
+            <select
+              value={filter.category}
+              onChange={(e) =>
+                setFilter((f) => ({
+                  ...f,
+                  category: e.target.value,
+                }))
+              }
+              className="w-full border rounded-md px-2 py-1 text-xs"
+            >
+              <option value="todos">Todas categorias</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={loadBase}
+              className="mt-2 w-full border rounded-md px-2 py-1 text-[11px]"
+            >
+              Atualizar
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-auto">
+            {loading ? (
+              <p className="p-3 text-slate-500 text-xs">
+                Carregando mensagens...
+              </p>
+            ) : groupedByPhone.length === 0 ? (
+              <p className="p-3 text-slate-500 text-xs">
+                Nenhuma conversa encontrada.
+              </p>
+            ) : (
+              groupedByPhone.map((m) => {
+                const cat = categories.find(
+                  (c) => c.name === m.category
+                );
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() =>
+                      openChat(m.phone || m.sender)
+                    }
+                    className={`w-full text-left px-3 py-2 border-b border-slate-200 hover:bg-slate-100 ${
+                      selectedPhone === (m.phone || m.sender)
+                        ? "bg-slate-100"
+                        : ""
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="font-semibold text-[11px]">
+                        {m.sender_name ||
+                          m.phone ||
+                          m.sender}
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        {new Date(
+                          m.created_at
+                        ).toLocaleTimeString("pt-BR", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </div>
+                    </div>
+                    <div className="text-[11px] text-slate-600 truncate">
+                      {m.message}
+                    </div>
+                    {cat && (
+                      <div className="mt-1 text-[10px]">
+                        <span
+                          className="px-1.5 py-0.5 rounded-full text-white"
+                          style={{
+                            backgroundColor:
+                              cat.color || "#1a73e8",
+                          }}
+                        >
+                          {cat.name}
+                        </span>
+                      </div>
+                    )}
+                  </button>
+                );
+              })
+            )}
+          </div>
         </div>
 
-        {error && (
-          <p className="text-xs text-red-600 mt-2">{error}</p>
-        )}
+        {/* COLUNA 2 – CHAT */}
+        <div className="bg-white rounded-lg border border-slate-200 flex flex-col text-xs">
+          <div className="border-b border-slate-200 px-4 py-2 flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="font-semibold text-sm">
+                {selectedPhone || "Selecione um contato"}
+              </span>
+              <span className="text-[11px] text-slate-500">
+                Histórico da conversa
+              </span>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto bg-slate-50 p-3">
+            {!selectedPhone ? (
+              <p className="text-slate-500 text-xs">
+                Selecione um contato na coluna à esquerda.
+              </p>
+            ) : chatMessages.length === 0 ? (
+              <p className="text-slate-500 text-xs">
+                Nenhuma mensagem ainda.
+              </p>
+            ) : (
+              chatMessages.map((m) => (
+                <div
+                  key={m.id}
+                  className={`mb-1 flex ${
+                    m.direction === "out"
+                      ? "justify-end"
+                      : "justify-start"
+                  }`}
+                >
+                  <div
+                    className={`px-3 py-2 rounded-xl max-w-[70%] whitespace-pre-wrap text-[11px] ${
+                      m.direction === "out"
+                        ? "bg-blue-600 text-white"
+                        : "bg-white border border-slate-200 text-slate-800"
+                    }`}
+                  >
+                    {m.message}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
 
-        <form
-          onSubmit={handleSend}
-          className="mt-3 flex gap-2"
-        >
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Digite sua pergunta..."
-            className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm"
-          />
-          <button
-            type="submit"
-            disabled={loading}
-            className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-60"
-          >
-            Enviar
-          </button>
-        </form>
+          <div className="border-t border-slate-200 px-3 py-2">
+            {selectedPhone && aiSuggestion && (
+              <div className="mb-2 text-[11px] bg-yellow-50 border border-yellow-200 rounded-md p-2 text-slate-700">
+                <strong>Sugestão da IA:</strong> {aiSuggestion}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Digite uma resposta..."
+                className="flex-1 border rounded-md px-2 py-1 text-xs"
+              />
+              <button
+                onClick={sendReply}
+                disabled={sending || !selectedPhone}
+                className="px-3 py-1 bg-blue-600 text-white rounded-md text-xs hover:bg-blue-700 disabled:opacity-50"
+              >
+                Enviar
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* COLUNA 3 – DETALHES / CLASSIFICAÇÃO */}
+        <div className="bg-white rounded-lg border border-slate-200 flex flex-col text-xs">
+          <div className="border-b border-slate-200 px-3 py-2">
+            <div className="font-semibold text-sm mb-1">
+              Detalhes da conversa
+            </div>
+            <p className="text-[11px] text-slate-500">
+              Classificação manual ou por IA.
+            </p>
+          </div>
+          <div className="flex-1 overflow-auto p-3">
+            {selectedPhone ? (
+              <>
+                <div className="mb-3">
+                  <div className="text-[11px] text-slate-500">
+                    Telefone
+                  </div>
+                  <div className="font-semibold text-sm">
+                    {selectedPhone}
+                  </div>
+                </div>
+                <div className="mb-3">
+                  <div className="text-[11px] text-slate-500">
+                    Categoria atual (última mensagem)
+                  </div>
+                  {(() => {
+                    const last = [...chatMessages].reverse()[0];
+                    if (!last || !last.category)
+                      return (
+                        <div className="text-[11px] text-slate-400">
+                          Não categorizado
+                        </div>
+                      );
+                    const cat = categories.find(
+                      (c) => c.name === last.category
+                    );
+                    return (
+                      <div className="mt-1">
+                        <span
+                          className="px-2 py-1 rounded-full text-white text-[11px]"
+                          style={{
+                            backgroundColor:
+                              cat?.color || "#1a73e8",
+                          }}
+                        >
+                          {last.category}
+                        </span>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {chatMessages.length > 0 && (
+                  <div className="mb-3">
+                    <div className="text-[11px] text-slate-500 mb-1">
+                      Classificar última mensagem com IA
+                    </div>
+                    <button
+                      disabled={classifying}
+                      onClick={() =>
+                        classifyWithAI(
+                          chatMessages[chatMessages.length - 1]
+                        )
+                      }
+                      className="px-3 py-1 bg-slate-900 text-white rounded-md text-[11px] hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      {classifying
+                        ? "Classificando..."
+                        : "Classificar pela IA"}
+                    </button>
+                  </div>
+                )}
+
+                <div className="mt-4 border-t border-slate-200 pt-3">
+                  <div className="text-[11px] text-slate-500 mb-1">
+                    Observação
+                  </div>
+                  <p className="text-[11px] text-slate-600">
+                    Você pode usar esta tela apenas como painel
+                    operacional. A inteligência de classificação e
+                    sugestão já está ativa nesta versão básica.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <p className="text-slate-500 text-xs">
+                Selecione uma conversa para ver detalhes.
+              </p>
+            )}
+          </div>
+        </div>
       </div>
     </PageShell>
   );
 }
 
-// --------------------------------------------------
-// CONFIGURAÇÕES (apenas informativo por enquanto)
-// --------------------------------------------------
+// =============================
+//  CONFIGURAÇÕES
+// =============================
 
 function ConfigSection() {
   return (
     <PageShell
       title="Configurações"
-      subtitle="Informações técnicas básicas da instalação."
+      subtitle="Informações técnicas para implantação"
     >
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 text-sm text-slate-700 space-y-2">
-        <p>
-          <strong>Ambiente:</strong> Vercel + Supabase + Tailwind + FullCalendar.
-        </p>
-        <p>
-          <strong>Tabelas principais:</strong> patients, appointments_full,
-          waitlist_full, messages_center, clinic_users, documents, medical_notes,
-          settings.
-        </p>
-        <p>
-          <strong>Integração WhatsApp (AVISA API):</strong> permanece em outras
-          tabelas <span className="font-mono text-xs">whatsapp_*</span>, que não
-          foram alteradas.
-        </p>
-        <p className="text-xs text-slate-500">
-          Obs.: Qualquer erro 400/401 vindo do Supabase geralmente está ligado
-          a RLS ou coluna inexistente. Nesta versão, as políticas de RLS foram
-          desativadas para simplificar até a fase de testes.
-        </p>
+      <div className="grid grid-cols-2 gap-4 text-xs">
+        <div className="bg-white rounded-lg border border-slate-200 p-4">
+          <h2 className="font-semibold mb-2 text-sm">
+            Integrações ativas
+          </h2>
+          <ul className="list-disc list-inside text-slate-600 space-y-1">
+            <li>Supabase (Banco de dados, Realtime, Edge Functions)</li>
+            <li>WhatsApp via AVISA API (Webhook + envio)</li>
+            <li>OpenAI (IA para respostas e classificação)</li>
+            <li>FullCalendar (Agenda visual tipo Google Calendar)</li>
+          </ul>
+        </div>
+        <div className="bg-white rounded-lg border border-slate-200 p-4">
+          <h2 className="font-semibold mb-2 text-sm">
+            Variáveis de ambiente necessárias
+          </h2>
+          <ul className="list-disc list-inside text-slate-600 space-y-1">
+            <li>VITE_SUPABASE_URL</li>
+            <li>VITE_SUPABASE_ANON_KEY</li>
+            <li>VITE_OPENAI_API_KEY</li>
+            <li>VITE_AVISA_API_KEY (opcional, para enviar pelo WhatsApp)</li>
+          </ul>
+        </div>
       </div>
     </PageShell>
   );
 }
 
-// --------------------------------------------------
-// APP PRINCIPAL
-// --------------------------------------------------
+// =============================
+//  APP PRINCIPAL
+// =============================
 
 export default function App() {
   const [section, setSection] = useState<Section>("dashboard");
 
-  if (!supabase) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-50 text-sm">
-        Configure as variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.
-      </div>
-    );
-  }
-
   return (
-    <div className="flex min-h-screen">
+    <AppShell>
       <Sidebar active={section} onChange={setSection} />
       {section === "dashboard" && <DashboardSection />}
-      {section === "patients" && <PatientsSection />}
+      {section === "pacientes" && <PacientesSection />}
       {section === "agenda" && <AgendaSection />}
       {section === "waitlist" && <WaitlistSection />}
-      {section === "messages" && <MessagesSection />}
-      {section === "doctor" && <DoctorPanelSection />}
-      {section === "chat" && <ChatSection />}
+      {section === "central" && <CentralClinicaSection />}
       {section === "config" && <ConfigSection />}
-    </div>
+    </AppShell>
   );
 }
